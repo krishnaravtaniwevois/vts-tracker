@@ -19,7 +19,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { LoginScreen } from './components/LoginScreen';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
 import { TabErrorBoundary } from './components/ErrorBoundary';
-import { fetchAllFleetData, getStoredApiUrl, getCurrentUser, setCurrentUser } from './services/api';
+import { fetchAllFleetData, getStoredApiUrl, getCurrentUser, setCurrentUser, saveDailySnapshotApi } from './services/api';
 export function App() {
   const [activeNav, setActiveNavState] = useState(() => {
     return localStorage.getItem('vts_tracker_active_nav') || 'Overview';
@@ -58,6 +58,36 @@ export function App() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isSavingDaily, setIsSavingDaily] = useState(false);
+  const [saveToast, setSaveToast] = useState(null);
+
+  const handleSaveDailySnapshot = async () => {
+    setIsSavingDaily(true);
+    setSaveToast(null);
+    try {
+      const res = await saveDailySnapshotApi({ saveSheetTab: true });
+      if (res && res.success) {
+        setSaveToast({
+          type: 'success',
+          text: `✅ ${res.message || "Today's sheet saved successfully!"}`
+        });
+        loadData();
+      } else {
+        setSaveToast({
+          type: 'error',
+          text: `❌ ${res?.error || 'Failed to save sheet snapshot.'}`
+        });
+      }
+    } catch (err) {
+      setSaveToast({
+        type: 'error',
+        text: `❌ Error saving sheet: ${err.message}`
+      });
+    } finally {
+      setIsSavingDaily(false);
+      setTimeout(() => setSaveToast(null), 6000);
+    }
+  };
 
   const handleLogout = () => {
     setCurrentUser(null);
@@ -216,6 +246,47 @@ export function App() {
 
       {/* Main App Content Area */}
       <main className="main-content">
+        {/* Floating Save Toast Notification */}
+        {saveToast && (
+          <div
+            style={{
+              position: 'fixed',
+              top: '18px',
+              right: '24px',
+              zIndex: 99999,
+              padding: '12px 20px',
+              borderRadius: '10px',
+              background: saveToast.type === 'success' ? '#065f46' : '#991b1b',
+              border: `1px solid ${saveToast.type === 'success' ? '#34d399' : '#f87171'}`,
+              color: '#fff',
+              fontSize: '13px',
+              fontWeight: 700,
+              boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              animation: 'fadeIn 0.2s ease'
+            }}
+          >
+            <span>{saveToast.text}</span>
+            <button
+              type="button"
+              onClick={() => setSaveToast(null)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#fff',
+                cursor: 'pointer',
+                fontSize: '18px',
+                padding: '0 4px',
+                lineHeight: 1
+              }}
+            >
+              &times;
+            </button>
+          </div>
+        )}
+
         {/* Top Header */}
         <header className="top-header">
           <div className="header-left">
@@ -231,6 +302,41 @@ export function App() {
           </div>
 
           <div className="header-actions">
+            {/* 1-Click Save Daily Sheet Snapshot */}
+            <button
+              type="button"
+              onClick={handleSaveDailySnapshot}
+              disabled={isSavingDaily}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '7px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '8px',
+                background: isSavingDaily ? 'rgba(16, 185, 129, 0.25)' : 'linear-gradient(135deg, #10b981, #059669)',
+                border: 'none',
+                color: '#fff',
+                cursor: isSavingDaily ? 'not-allowed' : 'pointer',
+                boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)',
+                transition: 'all 0.15s ease',
+                whiteSpace: 'nowrap'
+              }}
+              title="Save or update today's sheet snapshot to Google Drive (replaces previous version of today)"
+            >
+              {isSavingDaily ? (
+                <>
+                  <Icon name="refresh" size={14} className="spin" />
+                  <span>Saving Today's Sheet...</span>
+                </>
+              ) : (
+                <>
+                  <span>💾 Save Today's Sheet</span>
+                </>
+              )}
+            </button>
+
             {/* Direct Refresh Action */}
             <button
               className="icon-button"
