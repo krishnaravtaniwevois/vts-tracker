@@ -2,6 +2,8 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Icon } from './Icons';
 import { fetchVehicleHistory, fetchMorningFleetDigest } from '../services/api';
 import { exportToExcelFile, exportToCsvFile } from '../services/exportUtils';
+import * as XLSX from 'xlsx';
+import Papa from 'papaparse';
 
 export function VehicleHistoryView({
   devices = [],
@@ -897,32 +899,99 @@ export function VehicleHistoryView({
     });
   };
 
-  // CSV Export with enhanced columns
-  const handleExportCsv = () => {
-    if (!filteredResults || filteredResults.length === 0) return;
+  // Dedicated Excel (.xlsx) export for history audit records
+  const handleExportAuditExcel = () => {
+    if (!filteredResults || filteredResults.length === 0) {
+      alert('No audit records to export.');
+      return;
+    }
 
-    const headers = ['Date', 'Vehicle Name', 'IMEI / Unique ID', 'City', 'SIM / Phone', 'Roadcast Status', 'Final Status', 'Matched In', 'Technician Remark', 'Chronic Streak'];
-    const rows = filteredResults.map((r) => [
-      `"${r.date || ''}"`,
-      `"${r.vehicleName || r.vehicle || searchTerm}"`,
-      `"${r.imei || ''}"`,
-      `"${r.city || ''}"`,
-      `"${r.phone || r.sim || ''}"`,
-      `"${r.roadcastStatus || ''}"`,
-      `"${r.finalStatus || ''}"`,
-      `"${r.matchedIn || ''}"`,
-      `"${(r.remark || '').replace(/"/g, '""')}"`,
-      `"${r.inactiveStreak || 0}"`
-    ]);
+    const exportRows = filteredResults.map((r, idx) => ({
+      'Sr. No': idx + 1,
+      'Date': r.displayDate || r.date || '',
+      'Vehicle Number': r.vehicleName || r.vehicle || searchTerm || '',
+      'IMEI Number': r.imei || '',
+      'Project Site / City': r.city || '',
+      'SIM / Phone': r.phone || r.sim || '',
+      'Roadcast Status': r.roadcastStatus || r.status || '',
+      'Final Status': r.finalStatus || '',
+      'Defaulter Days': r.inactiveStreak || 0,
+      'Technician Remark': r.remark || r.inactiveRunningRemark || '',
+      'Matched In Sheet': r.matchedIn || ''
+    }));
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    worksheet['!cols'] = [
+      { wch: 8 },  // Sr. No
+      { wch: 14 }, // Date
+      { wch: 22 }, // Vehicle Number
+      { wch: 20 }, // IMEI Number
+      { wch: 18 }, // Project Site / City
+      { wch: 16 }, // SIM / Phone
+      { wch: 18 }, // Roadcast Status
+      { wch: 15 }, // Final Status
+      { wch: 16 }, // Defaulter Days
+      { wch: 42 }, // Technician Remark
+      { wch: 22 }  // Matched In Sheet
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'History_Audit');
+
+    const label = (searchTerm || selectedCity || (selectedCities.length > 0 ? selectedCities.join('_') : 'Fleet_Audit')).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `VTS_History_Audit_${label}_${historyStart}_to_${historyEnd}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+  };
+
+  // Dedicated CSV (.csv) export for history audit records
+  const handleExportAuditCsv = () => {
+    if (!filteredResults || filteredResults.length === 0) {
+      alert('No audit records to export.');
+      return;
+    }
+
+    const exportRows = filteredResults.map((r, idx) => ({
+      'Sr No': idx + 1,
+      'Date': r.displayDate || r.date || '',
+      'Vehicle Number': r.vehicleName || r.vehicle || searchTerm || '',
+      'IMEI Number': r.imei || '',
+      'Project Site / City': r.city || '',
+      'SIM / Phone': r.phone || r.sim || '',
+      'Roadcast Status': r.roadcastStatus || r.status || '',
+      'Final Status': r.finalStatus || '',
+      'Defaulter Days': r.inactiveStreak || 0,
+      'Technician Remark': r.remark || r.inactiveRunningRemark || '',
+      'Matched In Sheet': r.matchedIn || ''
+    }));
+
+    const csv = Papa.unparse(exportRows);
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `FleetAudit_${(searchTerm || selectedCity || 'All').replace(/\s+/g, '_')}_${historyStart}_to_${historyEnd}.csv`);
+    link.href = URL.createObjectURL(blob);
+    const label = (searchTerm || selectedCity || (selectedCities.length > 0 ? selectedCities.join('_') : 'Fleet_Audit')).replace(/[^a-zA-Z0-9_-]/g, '_');
+    link.setAttribute('download', `VTS_History_Audit_${label}_${historyStart}_to_${historyEnd}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // Alias for backward compatibility
+  const handleExportCsv = handleExportAuditCsv;
+
+  // 1-Click Clear / New Search
+  const handleClearHistory = () => {
+    setHistoryData(null);
+    setSearchTerm('');
+    setSelectedCity('');
+    setSelectedCities([]);
+    setErrorMsg(null);
+    setShowSuggestions(false);
+    setCurrentPage(1);
+    setTableFilter('');
+    setStatusTabFilter('all');
+    setVehicleFilter('all');
+    setActiveImeiTab('all');
+    setActiveVehicleTab('all');
   };
 
   const handlePrintReport = () => {
@@ -1408,15 +1477,12 @@ export function VehicleHistoryView({
                         setSelectedCities([]);
                         setSearchField('city');
                         setSearchTerm('');
-                        handleSearch('', s.value, 'city');
                       } else if (s.type === 'IMEI') {
                         setSearchTerm(s.value);
                         setSearchField('imei');
-                        handleSearch(s.value, '', 'imei');
                       } else {
                         setSearchTerm(s.value);
                         setSearchField('vehicle');
-                        handleSearch(s.value, '', 'vehicle');
                       }
                       setShowSuggestions(false);
                     }}
@@ -1451,9 +1517,9 @@ export function VehicleHistoryView({
             onClick={() => handleSearch()}
             disabled={loadingHistory}
             style={{
-              padding: '13px 28px',
+              padding: '13px 26px',
               fontSize: '15px',
-              fontWeight: 700,
+              fontWeight: 800,
               borderRadius: '10px',
               display: 'inline-flex',
               alignItems: 'center',
@@ -1461,12 +1527,36 @@ export function VehicleHistoryView({
               whiteSpace: 'nowrap',
               flexShrink: 0,
               background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.35)',
+              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)',
               cursor: 'pointer'
             }}
           >
             <Icon name="search" size={18} />
-            {loadingHistory ? 'Searching Reports...' : 'Search History'}
+            {loadingHistory ? 'Searching Reports...' : '🔍 Confirm & Search'}
+          </button>
+
+          {/* Clear / New Search Button */}
+          <button
+            type="button"
+            onClick={handleClearHistory}
+            style={{
+              padding: '13px 20px',
+              fontSize: '14px',
+              fontWeight: 700,
+              borderRadius: '10px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid var(--border-color)',
+              color: '#cbd5e1',
+              cursor: 'pointer'
+            }}
+            title="Reset filters and start a clean search"
+          >
+            🔄 Clear / New Search
           </button>
         </div>
 
@@ -1482,7 +1572,6 @@ export function VehicleHistoryView({
                 setSelectedCity(val);
                 setSelectedCities([]);
                 setErrorMsg(null);
-                if (val) handleSearch(searchTerm, val, searchField);
               }}
               style={{
                 padding: '8px 14px',
@@ -1674,7 +1763,6 @@ export function VehicleHistoryView({
                 setSelectedCities([]);
                 setSearchField('city');
                 setSearchTerm('');
-                handleSearch('', city, 'city');
               }}
               style={{
                 background: selectedCity === city ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.08)',
@@ -1744,1312 +1832,216 @@ export function VehicleHistoryView({
               </span>
             </div>
 
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handleExportAuditExcel}
+                style={{
+                  background: 'linear-gradient(135deg, #10b981, #059669)',
+                  border: 'none',
+                  color: '#fff',
+                  borderRadius: '8px',
+                  padding: '7px 14px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  boxShadow: '0 2px 8px rgba(16, 185, 129, 0.35)'
+                }}
+                title="Download complete audit records as Excel spreadsheet (.xlsx)"
+              >
+                📗 Download Excel (.xlsx)
+              </button>
+              <button
+                type="button"
+                onClick={handleExportAuditCsv}
+                style={{
+                  background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                  border: 'none',
+                  color: '#fff',
+                  borderRadius: '8px',
+                  padding: '7px 14px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  boxShadow: '0 2px 8px rgba(37, 99, 235, 0.35)'
+                }}
+                title="Download complete audit records as CSV file (.csv)"
+              >
+                📄 Download CSV (.csv)
+              </button>
               <button
                 type="button"
                 onClick={handlePrintReport}
                 className="secondary-button"
-                style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 700, borderRadius: '6px' }}
-                title="Print this audit report"
+                style={{ padding: '7px 14px', fontSize: '12px', fontWeight: 700, borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                title="Print executive audit report"
               >
                 🖨️ Print Report
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setHistoryData(null);
-                  setSearchTerm('');
-                  setSelectedCity('');
-                  setSelectedCities([]);
-                }}
+                onClick={handleClearHistory}
                 style={{
                   background: 'rgba(255, 255, 255, 0.08)',
                   border: '1px solid var(--border-color)',
                   color: '#cbd5e1',
-                  borderRadius: '6px',
-                  padding: '6px 12px',
-                  fontSize: '11px',
+                  borderRadius: '8px',
+                  padding: '7px 14px',
+                  fontSize: '12px',
                   fontWeight: 700,
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px'
                 }}
-                title="Return to full fleet executive dashboard"
+                title="Clear current audit and start a clean search"
               >
-                ← Back to Executive Overview
+                🔄 Clear / New Search
               </button>
             </div>
           </div>
 
-          {/* Multi-IMEI Tab Switcher & Dynamic Matrix */}
-          {allImeisData.list.length > 1 && (
-            <div
-              style={{
-                marginBottom: '16px',
-                padding: '12px 16px',
-                background: 'rgba(30, 41, 59, 0.7)',
-                border: '1px solid rgba(99, 102, 241, 0.3)',
-                borderRadius: '12px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '12px'
-              }}
-            >
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '11px', fontWeight: 800, color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-                  Audited IMEIs ({allImeisData.list.length}):
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setActiveImeiTab('all')}
-                  style={{
-                    background: activeImeiTab === 'all' ? '#6366f1' : 'rgba(99, 102, 241, 0.15)',
-                    border: activeImeiTab === 'all' ? '1px solid #818cf8' : '1px solid rgba(99, 102, 241, 0.3)',
-                    color: activeImeiTab === 'all' ? '#fff' : '#c7d2fe',
-                    padding: '4px 12px',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
-                >
-                  📊 Compare All Matrix ({allImeisData.list.length})
-                </button>
-                {allImeisData.summaries.map((im) => {
-                  const isSel = activeImeiTab === im.imei;
-                  return (
-                    <button
-                      key={im.imei}
-                      type="button"
-                      onClick={() => setActiveImeiTab(im.imei)}
-                      style={{
-                        background: isSel ? '#3b82f6' : 'rgba(255, 255, 255, 0.05)',
-                        border: isSel ? '1px solid #60a5fa' : '1px solid var(--border-color)',
-                        color: isSel ? '#fff' : '#cbd5e1',
-                        padding: '4px 10px',
-                        borderRadius: '8px',
-                        fontSize: '11px',
-                        fontFamily: 'monospace',
-                        cursor: 'pointer',
-                        fontWeight: isSel ? 700 : 500,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}
-                      title={`Inspect dynamic timeline of IMEI ${im.imei} (Vehicle: ${im.latestVehicle || '—'})`}
-                    >
-                      📱 {im.imei}
-                      <span style={{ fontFamily: 'inherit', fontSize: '10px', opacity: 0.8 }}>
-                        ({im.latestVehicle || im.latestCity || '—'})
-                      </span>
-                    </button>
-                  );
-                })}
+          {/* Executive 4-KPI Summary Strip */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px', marginBottom: '18px' }}>
+            <div className="card" style={{ padding: '16px', borderRadius: '12px', borderLeft: '4px solid #3b82f6', background: 'var(--card-bg)' }}>
+              <div style={{ fontSize: '11px', color: '#93c5fd', textTransform: 'uppercase', fontWeight: 700 }}>
+                Total Audit Records
               </div>
-
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  onClick={handleCopyMultiImeiWhatsApp}
-                  style={{
-                    background: 'rgba(37, 211, 102, 0.2)',
-                    border: '1px solid rgba(37, 211, 102, 0.4)',
-                    color: '#25d366',
-                    borderRadius: '6px',
-                    padding: '5px 10px',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
-                >
-                  📲 Copy All IMEIs (WhatsApp)
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExportMultiImeiCsv}
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.06)',
-                    border: '1px solid var(--border-color)',
-                    color: '#cbd5e1',
-                    borderRadius: '6px',
-                    padding: '5px 10px',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
-                >
-                  📥 Export All IMEIs CSV
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* If All IMEIs Matrix view is active */}
-          {allImeisData.list.length > 1 && activeImeiTab === 'all' ? (
-            <div
-              style={{
-                background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%)',
-                border: '2px solid #6366f1',
-                borderRadius: '16px',
-                padding: '24px',
-                marginBottom: '24px',
-                boxShadow: '0 12px 36px rgba(99, 102, 241, 0.25)'
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '14px', marginBottom: '20px' }}>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 800, color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: '0.8px', background: 'rgba(99, 102, 241, 0.25)', padding: '3px 10px', borderRadius: '6px', border: '1px solid rgba(99, 102, 241, 0.4)' }}>
-                      📊 MULTI-IMEI COMPARATIVE AUDIT MATRIX
-                    </span>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      Audit Window: <b>{historyStart}</b> to <b>{historyEnd}</b>
-                    </span>
-                  </div>
-                  <h3 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#fff' }}>
-                    Cross-Device Movement, Swaps &amp; Hardware Health
-                  </h3>
-                  <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-                    Comparative dynamic audit across {allImeisData.list.length} target IMEIs. Click any IMEI row to inspect its full chronological movement stepper.
-                  </p>
-                </div>
-              </div>
-
-              {/* Comparative Stats Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '20px' }}>
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: '#a5b4fc', textTransform: 'uppercase', fontWeight: 700 }}>Total Audited IMEIs</div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, marginTop: '2px', color: '#fff' }}>{allImeisData.list.length} Devices</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Scanned across daily sheets</div>
-                </div>
-
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: '#c084fc', textTransform: 'uppercase', fontWeight: 700 }}>Reassigned / Swapped</div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, marginTop: '2px', color: '#c084fc' }}>
-                    {allImeisData.summaries.filter(im => im.transitions.length > 0).length} IMEIs
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Moved across multiple vehicles</div>
-                </div>
-
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: '#60a5fa', textTransform: 'uppercase', fontWeight: 700 }}>Multi-City Transfers</div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, marginTop: '2px', color: '#60a5fa' }}>
-                    {allImeisData.summaries.filter(im => im.distinctCities.length > 1).length} IMEIs
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Transferred between project sites</div>
-                </div>
-
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: '#f87171', textTransform: 'uppercase', fontWeight: 700 }}>Return / Damage Logs</div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, marginTop: '2px', color: '#f87171' }}>
-                    {allImeisData.summaries.filter(im => im.damageMatches.length > 0).length} IMEIs
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Flagged in repair sheets</div>
-                </div>
-              </div>
-
-              {/* Matrix Table */}
-              <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead>
-                    <tr style={{ background: 'rgba(255,255,255,0.05)', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                      <th style={{ padding: '10px 14px' }}>IMEI Number</th>
-                      <th style={{ padding: '10px 14px' }}>Latest Deployment</th>
-                      <th style={{ padding: '10px 14px' }}>Uptime &amp; Health</th>
-                      <th style={{ padding: '10px 14px' }}>Historical Vehicles Flow</th>
-                      <th style={{ padding: '10px 14px' }}>Sites Visited</th>
-                      <th style={{ padding: '10px 14px' }}>Swaps</th>
-                      <th style={{ padding: '10px 14px' }}>Damage Log</th>
-                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Dynamic Stepper</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allImeisData.summaries.map((im) => {
-                      const uptimeNum = parseFloat(im.uptimePct);
-                      const uptimeColor = uptimeNum >= 80 ? '#34d399' : uptimeNum >= 60 ? '#f59e0b' : '#f87171';
-                      return (
-                        <tr key={im.imei} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', transition: 'background 0.15s ease' }}>
-                          <td style={{ padding: '10px 14px', fontFamily: 'monospace', fontWeight: 700, color: '#fff' }}>
-                            📱 {im.imei}
-                          </td>
-                          <td style={{ padding: '10px 14px' }}>
-                            <div style={{ fontWeight: 700, color: '#60a5fa' }}>🚗 {im.latestVehicle || '—'}</div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>📍 {im.latestCity || '—'} ({im.latestStatus})</div>
-                          </td>
-                          <td style={{ padding: '10px 14px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <strong style={{ color: uptimeColor }}>{im.uptimePct}%</strong>
-                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>({im.activeDays}/{im.totalDays}d)</span>
-                            </div>
-                            <div style={{ height: '4px', width: '80px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden', marginTop: '4px' }}>
-                              <div style={{ height: '100%', width: `${im.uptimePct}%`, background: uptimeColor }} />
-                            </div>
-                          </td>
-                          <td style={{ padding: '10px 14px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-                              {im.distinctVehicles.map((v, vIdx) => (
-                                <span key={vIdx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                  <span style={{ background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#93c5fd', padding: '2px 6px', borderRadius: '4px', fontSize: '11px' }}>
-                                    {v.vehicleName} ({v.daysCount}d)
-                                  </span>
-                                  {vIdx < im.distinctVehicles.length - 1 && <span style={{ color: '#a5b4fc', fontSize: '12px' }}>➔</span>}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td style={{ padding: '10px 14px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-                              {im.distinctCities.map((c, cIdx) => (
-                                <span key={cIdx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                  <span style={{ background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#86efac', padding: '2px 6px', borderRadius: '4px', fontSize: '11px' }}>
-                                    {c.city}
-                                  </span>
-                                  {cIdx < im.distinctCities.length - 1 && <span style={{ color: '#86efac', fontSize: '12px' }}>➔</span>}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td style={{ padding: '10px 14px' }}>
-                            {im.transitions.length > 0 ? (
-                              <span style={{ background: 'rgba(168, 85, 247, 0.2)', border: '1px solid #a855f7', color: '#d8b4fe', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 700 }}>
-                                🔄 {im.transitions.length} Swaps
-                              </span>
-                            ) : (
-                              <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Single Vehicle</span>
-                            )}
-                          </td>
-                          <td style={{ padding: '10px 14px' }}>
-                            {im.damageMatches.length > 0 ? (
-                              <span style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid #ef4444', color: '#fca5a5', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 700 }}>
-                                ⚠️ {im.damageMatches.length} Logs
-                              </span>
-                            ) : (
-                              <span style={{ color: '#86efac', fontSize: '11px' }}>Clean</span>
-                            )}
-                          </td>
-                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                            <button
-                              type="button"
-                              onClick={() => setActiveImeiTab(im.imei)}
-                              style={{
-                                background: 'rgba(99, 102, 241, 0.2)',
-                                border: '1px solid #6366f1',
-                                color: '#c7d2fe',
-                                padding: '4px 10px',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: 700,
-                                cursor: 'pointer'
-                              }}
-                            >
-                              Inspect Stepper ➔
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : imeiJourney ? (
-            <div
-              style={{
-                background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%)',
-                border: '2px solid #6366f1',
-                borderRadius: '16px',
-                padding: '24px',
-                marginBottom: '24px',
-                boxShadow: '0 12px 36px rgba(99, 102, 241, 0.25)',
-                position: 'relative'
-              }}
-            >
-              {allImeisData.list.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => setActiveImeiTab('all')}
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    border: '1px solid var(--border-color)',
-                    color: '#c7d2fe',
-                    borderRadius: '6px',
-                    padding: '4px 12px',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    marginBottom: '14px',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  ← Back to All ({allImeisData.list.length}) IMEIs Matrix
-                </button>
-              )}
-              {/* Top Header of IMEI Journey */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '20px' }}>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 800, color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: '0.8px', background: 'rgba(99, 102, 241, 0.25)', padding: '3px 10px', borderRadius: '6px', border: '1px solid rgba(99, 102, 241, 0.4)' }}>
-                      📱 DYNAMIC IMEI LIFECYCLE &amp; MOVEMENT AUDIT
-                    </span>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      Audit Window: <b>{historyStart}</b> to <b>{historyEnd}</b> ({imeiJourney.totalDays} Days)
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '6px' }}>
-                    <h2 style={{ margin: 0, fontSize: '24px', fontWeight: 900, fontFamily: 'monospace', color: '#fff', letterSpacing: '0.5px' }}>
-                      {imeiJourney.imei}
-                    </h2>
-                    
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(imeiJourney.imei);
-                        setImeiCopied(true);
-                        setTimeout(() => setImeiCopied(false), 2000);
-                      }}
-                      style={{
-                        background: imeiCopied ? '#10b981' : 'rgba(255, 255, 255, 0.08)',
-                        border: '1px solid var(--border-color)',
-                        color: imeiCopied ? '#fff' : '#cbd5e1',
-                        borderRadius: '6px',
-                        padding: '4px 10px',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}
-                    >
-                      {imeiCopied ? '✓ Copied' : '📋 Copy IMEI'}
-                    </button>
-
-                    {/* Dynamic Badges */}
-                    {imeiJourney.isMultiVehicle ? (
-                      <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', background: 'rgba(168, 85, 247, 0.25)', border: '1px solid #a855f7', color: '#d8b4fe' }}>
-                        🔄 Reassigned Across {imeiJourney.distinctVehicles.length} Vehicles
-                      </span>
-                    ) : (
-                      <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', background: 'rgba(16, 185, 129, 0.2)', border: '1px solid #10b981', color: '#86efac' }}>
-                        🟢 Dedicated Single Vehicle ({imeiJourney.distinctVehicles[0]?.vehicleName})
-                      </span>
-                    )}
-
-                    {imeiJourney.isMultiCity ? (
-                      <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', background: 'rgba(59, 130, 246, 0.25)', border: '1px solid #3b82f6', color: '#93c5fd' }}>
-                        🚚 Moved Across {imeiJourney.distinctCities.length} Cities ({imeiJourney.distinctCities.map(c => c.city).join(' ➔ ')})
-                      </span>
-                    ) : (
-                      <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.08)', border: '1px solid var(--border-color)', color: '#cbd5e1' }}>
-                        📍 Operating in {imeiJourney.distinctCities[0]?.city || 'Site'}
-                      </span>
-                    )}
-
-                    {imeiJourney.damageMatches.length > 0 && (
-                      <span style={{ fontSize: '12px', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', background: 'rgba(239, 68, 68, 0.25)', border: '1px solid #ef4444', color: '#fca5a5' }}>
-                        ⚠️ {imeiJourney.damageMatches.length} Return / Damage Log(s)
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Action Buttons for IMEI */}
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    onClick={handleCopyImeiWhatsApp}
-                    style={{
-                      background: 'rgba(37, 211, 102, 0.2)',
-                      border: '1px solid rgba(37, 211, 102, 0.5)',
-                      color: '#25d366',
-                      borderRadius: '8px',
-                      padding: '8px 14px',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px'
-                    }}
-                    title="Share complete dynamic IMEI allocation timeline on WhatsApp"
-                  >
-                    <span>📲 Share IMEI Journey</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={handleExportImeiCsv}
-                    style={{ padding: '8px 14px', fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}
-                  >
-                    <Icon name="download" size={14} /> Export IMEI CSV
-                  </button>
-                </div>
-              </div>
-
-              {/* Key KPI Stats Grid for this IMEI */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '22px' }}>
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: '#a5b4fc', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Assigned Vehicles
-                  </div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, marginTop: '2px', color: '#fff' }}>
-                    {imeiJourney.distinctVehicles.length}
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {imeiJourney.distinctVehicles.map(v => v.vehicleName).join(', ')}
-                  </div>
-                </div>
-
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: '#60a5fa', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Operating Sites / Cities
-                  </div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, marginTop: '2px', color: '#fff' }}>
-                    {imeiJourney.distinctCities.length}
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {imeiJourney.distinctCities.map(c => c.city).join(', ')}
-                  </div>
-                </div>
-
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: '#34d399', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Audited Days
-                  </div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, marginTop: '2px', color: '#fff' }}>
-                    {imeiJourney.totalDays} Days
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {imeiJourney.activeDays} Active • {imeiJourney.inactiveDays} Down
-                  </div>
-                </div>
-
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: parseFloat(imeiJourney.uptimePct) >= 80 ? '#34d399' : '#f87171', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Hardware Uptime %
-                  </div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, marginTop: '2px', color: parseFloat(imeiJourney.uptimePct) >= 80 ? '#34d399' : '#f87171' }}>
-                    {imeiJourney.uptimePct}%
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {imeiJourney.transitions.length} Swaps / Reassignments
-                  </div>
-                </div>
-
-                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontSize: '11px', color: '#fcd34d', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Latest Deployment
-                  </div>
-                  <div style={{ fontSize: '15px', fontWeight: 800, marginTop: '4px', color: '#60a5fa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    🚗 {imeiJourney.latestVehicle || '—'}
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    📍 {imeiJourney.latestCity} • {imeiJourney.latestStatus}
-                  </div>
-                </div>
-              </div>
-
-              {/* Sequential Visual Journey Flow (Chronological Stepper Cards) */}
-              <div style={{ marginBottom: '22px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span>🔄 Dynamic Allocation &amp; Movement Journey</span>
-                    <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
-                      (Chronological timeline across vehicles &amp; sites)
-                    </span>
-                  </h4>
-                  {imeiJourney.transitions.length > 0 && (
-                    <span style={{ fontSize: '11px', background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.3)', fontWeight: 600 }}>
-                      ⚡ {imeiJourney.transitions.length} Reassignment Event(s) Detected
-                    </span>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {imeiJourney.phases.map((phase, pIdx) => {
-                    const isCurrentActiveVeh = phase.vehicle === imeiJourney.latestVehicle;
-                    const nextTransition = imeiJourney.transitions[pIdx];
-
-                    return (
-                      <React.Fragment key={pIdx}>
-                        {/* Phase Card */}
-                        <div
-                          style={{
-                            background: 'rgba(255, 255, 255, 0.03)',
-                            border: isCurrentActiveVeh ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.1)',
-                            borderRadius: '10px',
-                            padding: '14px 18px',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            flexWrap: 'wrap',
-                            gap: '12px'
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                            <div
-                              style={{
-                                width: '36px',
-                                height: '36px',
-                                borderRadius: '8px',
-                                background: phase.color ? `${phase.color}25` : 'rgba(59, 130, 246, 0.2)',
-                                border: `1px solid ${phase.color || '#3b82f6'}`,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: '16px',
-                                fontWeight: 800,
-                                color: phase.color || '#60a5fa'
-                              }}
-                            >
-                              {pIdx + 1}
-                            </div>
-
-                            <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: '15px', fontWeight: 800, color: '#fff' }}>
-                                  🚗 {phase.vehicle}
-                                </span>
-                                <span style={{ fontSize: '12px', background: 'rgba(255, 255, 255, 0.08)', padding: '2px 8px', borderRadius: '4px', color: '#93c5fd' }}>
-                                  🏙️ {phase.city}
-                                </span>
-                                {isCurrentActiveVeh && (
-                                  <span style={{ fontSize: '10px', background: '#10b981', color: '#fff', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                                    Current / Latest
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                                📅 <b>{phase.startDate}</b> to <b>{phase.endDate}</b> ({phase.daysCount} Days)
-                                <span style={{ marginLeft: '10px' }}>
-                                  🟢 {phase.activeDays} Active • 🔴 {phase.inactiveDays} Inactive
-                                </span>
-                              </div>
-                              {phase.remarks.length > 0 && (
-                                <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '4px', fontStyle: 'italic' }}>
-                                  Remarks: "{phase.remarks.slice(0, 2).join('; ')}"
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (vehicleFilter === phase.vehicle) {
-                                  setVehicleFilter('all');
-                                } else {
-                                  setVehicleFilter(phase.vehicle);
-                                }
-                                setCurrentPage(1);
-                              }}
-                              style={{
-                                background: vehicleFilter === phase.vehicle ? '#3b82f6' : 'rgba(255,255,255,0.06)',
-                                border: '1px solid var(--border-color)',
-                                color: vehicleFilter === phase.vehicle ? '#fff' : 'inherit',
-                                borderRadius: '6px',
-                                padding: '5px 12px',
-                                fontSize: '11px',
-                                fontWeight: 600,
-                                cursor: 'pointer'
-                              }}
-                            >
-                              {vehicleFilter === phase.vehicle ? '✓ Showing This Vehicle' : 'Filter Table to Vehicle'}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDossierVehicle({ vehicleName: phase.vehicle, city: phase.city, imei: imeiJourney.imei });
-                                setDossierTab('timeline');
-                              }}
-                              style={{
-                                background: 'rgba(59, 130, 246, 0.15)',
-                                border: '1px solid rgba(59, 130, 246, 0.3)',
-                                color: '#60a5fa',
-                                borderRadius: '6px',
-                                padding: '5px 10px',
-                                fontSize: '11px',
-                                fontWeight: 600,
-                                cursor: 'pointer'
-                              }}
-                            >
-                              🔍 360° Dossier
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Transition Connector Box */}
-                        {nextTransition && (
-                          <div
-                            style={{
-                              margin: '2px 0 2px 24px',
-                              padding: '8px 14px',
-                              background: 'linear-gradient(90deg, rgba(168, 85, 247, 0.15) 0%, rgba(59, 130, 246, 0.1) 100%)',
-                              borderLeft: '3px solid #a855f7',
-                              borderRadius: '0 8px 8px 0',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '10px',
-                              fontSize: '12px'
-                            }}
-                          >
-                            <span style={{ fontSize: '16px' }}>⚡</span>
-                            <div>
-                              <strong style={{ color: '#d8b4fe' }}>
-                                Reassignment Event on {nextTransition.date}:
-                              </strong>
-                              <span style={{ color: '#f1f5f9', marginLeft: '6px' }}>
-                                Device removed from <b>{nextTransition.fromVehicle}</b> ({nextTransition.fromCity}) ➔ installed into <b>{nextTransition.toVehicle}</b> ({nextTransition.toCity})
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Vehicle Allocation Comparison Table */}
-              <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '10px', padding: '16px', marginBottom: '18px' }}>
-                <h4 style={{ margin: '0 0 10px 0', fontSize: '13px', fontWeight: 700, color: '#f1f5f9' }}>
-                  📊 Vehicle-Wise Allocation Breakdown ({imeiJourney.distinctVehicles.length} Vehicles):
-                </h4>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', textAlign: 'left', color: 'var(--text-muted)' }}>
-                        <th style={{ padding: '8px 10px' }}>VEHICLE NUMBER</th>
-                        <th style={{ padding: '8px 10px' }}>CITY (SITE)</th>
-                        <th style={{ padding: '8px 10px' }}>FIRST SEEN</th>
-                        <th style={{ padding: '8px 10px' }}>LAST SEEN</th>
-                        <th style={{ padding: '8px 10px' }}>DAYS ACTIVE / DOWN</th>
-                        <th style={{ padding: '8px 10px' }}>HEALTH %</th>
-                        <th style={{ padding: '8px 10px' }}>LATEST REMARK</th>
-                        <th style={{ padding: '8px 10px', textAlign: 'center' }}>ACTION</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {imeiJourney.distinctVehicles.map((v, idx) => {
-                        const isSelected = vehicleFilter === v.vehicleName;
-                        return (
-                          <tr
-                            key={idx}
-                            style={{
-                              borderBottom: '1px solid rgba(255,255,255,0.05)',
-                              background: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'transparent'
-                            }}
-                          >
-                            <td style={{ padding: '8px 10px', fontWeight: 700, color: v.color || '#60a5fa' }}>
-                              🚗 {v.vehicleName}
-                            </td>
-                            <td style={{ padding: '8px 10px' }}>
-                              {v.cities.join(', ') || '—'}
-                            </td>
-                            <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
-                              {v.firstSeen}
-                            </td>
-                            <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
-                              {v.lastSeen}
-                            </td>
-                            <td style={{ padding: '8px 10px' }}>
-                              <span style={{ color: '#10b981' }}>{v.activeDays}d Active</span> • <span style={{ color: v.inactiveDays > 0 ? '#ef4444' : 'var(--text-muted)' }}>{v.inactiveDays}d Down</span> ({v.daysCount}d total)
-                            </td>
-                            <td style={{ padding: '8px 10px', fontWeight: 700, color: parseFloat(v.uptimePct) >= 80 ? '#10b981' : '#f87171' }}>
-                              {v.uptimePct}%
-                            </td>
-                            <td style={{ padding: '8px 10px', color: 'var(--text-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {v.remarks[v.remarks.length - 1] || 'No remark'}
-                            </td>
-                            <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setVehicleFilter(isSelected ? 'all' : v.vehicleName);
-                                  setCurrentPage(1);
-                                }}
-                                style={{
-                                  background: isSelected ? '#3b82f6' : 'rgba(255,255,255,0.06)',
-                                  border: '1px solid var(--border-color)',
-                                  color: isSelected ? '#fff' : 'inherit',
-                                  borderRadius: '4px',
-                                  padding: '3px 8px',
-                                  fontSize: '11px',
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                {isSelected ? '✓ Filtered' : 'Filter Table'}
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Cross-Link Return & Damage Sheet Alerts */}
-              {imeiJourney.damageMatches.length > 0 && (
-                <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '10px', padding: '12px 16px', marginBottom: '14px' }}>
-                  <h5 style={{ margin: '0 0 6px 0', fontSize: '13px', color: '#fca5a5', fontWeight: 700 }}>
-                    🛠️ Hardware Return / Damage Sheet Records Found ({imeiJourney.damageMatches.length}):
-                  </h5>
-                  <div style={{ display: 'grid', gap: '6px' }}>
-                    {imeiJourney.damageMatches.map((dmg, dIdx) => (
-                      <div key={dIdx} style={{ fontSize: '12px', color: '#fecaca', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-                        <span>
-                          • <b>{dmg.timestamp}</b>: Return Reason: <i>{dmg.returnReason || 'Faulty'}</i> | Condition: <i>{dmg.condition || '—'}</i> | Courier: <i>{dmg.courierInfo || '—'}</i>
-                        </span>
-                        <span style={{ fontWeight: 700, color: '#f59e0b' }}>
-                          Status: {dmg.status || 'Received'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Filter Navigation Bar for Timeline Table */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '14px' }}>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>
-                    Table Vehicle Filter:
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => { setVehicleFilter('all'); setCurrentPage(1); }}
-                    style={{
-                      background: vehicleFilter === 'all' ? '#3b82f6' : 'rgba(255,255,255,0.05)',
-                      border: vehicleFilter === 'all' ? '1px solid #3b82f6' : '1px solid var(--border-color)',
-                      color: vehicleFilter === 'all' ? '#fff' : 'var(--text-muted)',
-                      padding: '3px 10px',
-                      borderRadius: '6px',
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    All Vehicles ({imeiJourney.totalDays})
-                  </button>
-
-                  {imeiJourney.distinctVehicles.map((v) => {
-                    const isSelected = vehicleFilter === v.vehicleName;
-                    return (
-                      <button
-                        key={v.vehicleName}
-                        type="button"
-                        onClick={() => { setVehicleFilter(isSelected ? 'all' : v.vehicleName); setCurrentPage(1); }}
-                        style={{
-                          background: isSelected ? v.color || '#3b82f6' : 'rgba(255,255,255,0.05)',
-                          border: isSelected ? `1px solid ${v.color || '#3b82f6'}` : '1px solid var(--border-color)',
-                          color: isSelected ? '#fff' : v.color || '#93c5fd',
-                          padding: '3px 10px',
-                          borderRadius: '6px',
-                          fontSize: '11px',
-                          fontWeight: isSelected ? 700 : 500,
-                          cursor: 'pointer'
-                        }}
-                      >
-                        🚗 {v.vehicleName} ({v.daysCount}d)
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {vehicleFilter !== 'all' && (
-                  <button
-                    type="button"
-                    onClick={() => { setVehicleFilter('all'); setCurrentPage(1); }}
-                    style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline' }}
-                  >
-                    Reset Filter to All
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : null}
-
-          {/* Multi-Vehicle Comparative Audit Section */}
-          {allVehiclesData.length > 1 && (
-            <div className="card" style={{ padding: '20px', marginBottom: '20px', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'var(--card-bg)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
-                <div>
-                  <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    🚗 Multi-Vehicle Comparative Audit ({allVehiclesData.length} Vehicles Audited)
-                  </h4>
-                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-                    Cross-vehicle downtime, chronic streaks, swapped devices &amp; 360° dossiers for all vehicles in this audit window.
-                  </p>
-                </div>
-
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    onClick={() => setActiveVehicleTab('all')}
-                    style={{
-                      background: activeVehicleTab === 'all' ? '#3b82f6' : 'rgba(255,255,255,0.05)',
-                      border: activeVehicleTab === 'all' ? '1px solid #3b82f6' : '1px solid var(--border-color)',
-                      color: activeVehicleTab === 'all' ? '#fff' : 'var(--text-muted)',
-                      padding: '4px 10px',
-                      borderRadius: '6px',
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    All ({allVehiclesData.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveVehicleTab('chronic')}
-                    style={{
-                      background: activeVehicleTab === 'chronic' ? '#ef4444' : 'rgba(255,255,255,0.05)',
-                      border: activeVehicleTab === 'chronic' ? '1px solid #ef4444' : '1px solid var(--border-color)',
-                      color: activeVehicleTab === 'chronic' ? '#fff' : '#f87171',
-                      padding: '4px 10px',
-                      borderRadius: '6px',
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    ⚠️ Chronic Defaulters ({allVehiclesData.filter(v => v.isChronic).length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveVehicleTab('swapped')}
-                    style={{
-                      background: activeVehicleTab === 'swapped' ? '#8b5cf6' : 'rgba(255,255,255,0.05)',
-                      border: activeVehicleTab === 'swapped' ? '1px solid #8b5cf6' : '1px solid var(--border-color)',
-                      color: activeVehicleTab === 'swapped' ? '#fff' : '#c084fc',
-                      padding: '4px 10px',
-                      borderRadius: '6px',
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    🔄 Swapped IMEIs ({allVehiclesData.filter(v => v.isSwapped || v.imeisList.length > 1).length})
-                  </button>
-                </div>
-              </div>
-
-              {/* Vehicle Table */}
-              <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead>
-                    <tr style={{ background: 'rgba(255,255,255,0.03)', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
-                      <th style={{ padding: '8px 12px' }}>Vehicle</th>
-                      <th style={{ padding: '8px 12px' }}>Site</th>
-                      <th style={{ padding: '8px 12px' }}>Audited Days</th>
-                      <th style={{ padding: '8px 12px' }}>Uptime %</th>
-                      <th style={{ padding: '8px 12px' }}>Defaulter Streak</th>
-                      <th style={{ padding: '8px 12px' }}>Installed / Swapped IMEIs</th>
-                      <th style={{ padding: '8px 12px' }}>Latest Remark</th>
-                      <th style={{ padding: '8px 12px', textAlign: 'center' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allVehiclesData
-                      .filter((v) => {
-                        if (activeVehicleTab === 'chronic') return v.isChronic;
-                        if (activeVehicleTab === 'swapped') return v.isSwapped || v.imeisList.length > 1;
-                        return true;
-                      })
-                      .map((v) => {
-                        const uptimeNum = parseFloat(v.uptimePct);
-                        const uptimeColor = uptimeNum >= 80 ? '#10b981' : uptimeNum >= 60 ? '#f59e0b' : '#ef4444';
-                        return (
-                          <tr key={v.vehicle} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                            <td style={{ padding: '8px 12px', fontWeight: 700, color: 'var(--text-main)' }}>
-                              🚗 {v.vehicle}
-                            </td>
-                            <td style={{ padding: '8px 12px', color: '#93c5fd' }}>
-                              {v.city}
-                            </td>
-                            <td style={{ padding: '8px 12px' }}>
-                              {v.totalDays}d ({v.activeDays} act / {v.inactiveDays} down)
-                            </td>
-                            <td style={{ padding: '8px 12px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <strong style={{ color: uptimeColor }}>{v.uptimePct}%</strong>
-                              </div>
-                              <div style={{ height: '4px', width: '70px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', overflow: 'hidden', marginTop: '3px' }}>
-                                <div style={{ height: '100%', width: `${v.uptimePct}%`, background: uptimeColor }} />
-                              </div>
-                            </td>
-                            <td style={{ padding: '8px 12px' }}>
-                              {v.isChronic || v.maxStreak >= 3 ? (
-                                <span style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid #ef4444', color: '#fca5a5', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }}>
-                                  🔥 {v.maxStreak}d Streak
-                                </span>
-                              ) : (
-                                <span style={{ color: '#10b981', fontSize: '11px' }}>🟢 Healthy</span>
-                              )}
-                            </td>
-                            <td style={{ padding: '8px 12px', fontFamily: 'monospace' }}>
-                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                                {v.imeisList.map((im, iIdx) => (
-                                  <button
-                                    key={iIdx}
-                                    type="button"
-                                    onClick={() => {
-                                      setSearchTerm(im);
-                                      setSearchField('imei');
-                                      handleSearch(im, '', 'imei');
-                                    }}
-                                    style={{
-                                      background: 'rgba(99, 102, 241, 0.15)',
-                                      border: '1px solid rgba(99, 102, 241, 0.3)',
-                                      color: '#c7d2fe',
-                                      borderRadius: '4px',
-                                      padding: '1px 5px',
-                                      fontSize: '11px',
-                                      cursor: 'pointer'
-                                    }}
-                                    title={`Audit dynamic journey of IMEI ${im}`}
-                                  >
-                                    📱 {im}
-                                  </button>
-                                ))}
-                              </div>
-                            </td>
-                            <td style={{ padding: '8px 12px', maxWidth: '180px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-muted)' }} title={v.latestRemark}>
-                              {v.latestRemark || '—'}
-                            </td>
-                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                              <div style={{ display: 'inline-flex', gap: '6px' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDossierVehicle({ vehicleName: v.vehicle, city: v.city, imei: v.imeisList[0] });
-                                    setDossierTab('timeline');
-                                  }}
-                                  style={{
-                                    background: 'rgba(59, 130, 246, 0.15)',
-                                    border: '1px solid #3b82f6',
-                                    color: '#60a5fa',
-                                    borderRadius: '4px',
-                                    padding: '3px 8px',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  📂 360° Dossier
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setVehicleFilter(vehicleFilter === v.vehicle ? 'all' : v.vehicle);
-                                    setCurrentPage(1);
-                                  }}
-                                  style={{
-                                    background: vehicleFilter === v.vehicle ? '#3b82f6' : 'rgba(255,255,255,0.05)',
-                                    border: '1px solid var(--border-color)',
-                                    color: vehicleFilter === v.vehicle ? '#fff' : 'inherit',
-                                    borderRadius: '4px',
-                                    padding: '3px 6px',
-                                    fontSize: '11px',
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  {vehicleFilter === v.vehicle ? '✓ Filtered' : 'Filter'}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* KPI Summary Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px', marginBottom: '20px' }}>
-            <div className="card" style={{ padding: '16px', borderLeft: '4px solid #3b82f6' }}>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>
-                Total Records Found
-              </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: 'var(--text-main)' }}>
+              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#fff' }}>
                 {summaryStats.total}
               </div>
               <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Matching daily report rows</small>
             </div>
 
-            <div className="card" style={{ padding: '16px', borderLeft: '4px solid #8b5cf6' }}>
-              <div style={{ fontSize: '11px', color: '#8b5cf6', textTransform: 'uppercase', fontWeight: 600 }}>
-                Unique Vehicles
+            <div className="card" style={{ padding: '16px', borderRadius: '12px', borderLeft: '4px solid #8b5cf6', background: 'var(--card-bg)' }}>
+              <div style={{ fontSize: '11px', color: '#c084fc', textTransform: 'uppercase', fontWeight: 700 }}>
+                Unique Fleet Vehicles
               </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#8b5cf6' }}>
+              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#c084fc' }}>
                 {summaryStats.uniqueVehicles}
               </div>
-              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Audited in this date window</small>
+              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Distinct vehicles audited</small>
             </div>
 
-            <div className="card" style={{ padding: '16px', borderLeft: '4px solid #10b981' }}>
-              <div style={{ fontSize: '11px', color: '#10b981', textTransform: 'uppercase', fontWeight: 600 }}>
-                Active Records
+            <div className="card" style={{ padding: '16px', borderRadius: '12px', borderLeft: '4px solid #10b981', background: 'var(--card-bg)' }}>
+              <div style={{ fontSize: '11px', color: '#86efac', textTransform: 'uppercase', fontWeight: 700 }}>
+                Active Fleet Uptime
               </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#10b981' }}>
-                {summaryStats.active}
+              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#34d399' }}>
+                {summaryStats.active} <span style={{ fontSize: '14px', color: '#86efac' }}>({summaryStats.uptimePct}%)</span>
               </div>
-              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Healthy &amp; streaming</small>
+              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Operational &amp; live streaming</small>
             </div>
 
-            <div className="card" style={{ padding: '16px', borderLeft: '4px solid #ef4444' }}>
-              <div style={{ fontSize: '11px', color: '#ef4444', textTransform: 'uppercase', fontWeight: 600 }}>
-                Downtime %
+            <div className="card" style={{ padding: '16px', borderRadius: '12px', borderLeft: '4px solid #ef4444', background: 'var(--card-bg)' }}>
+              <div style={{ fontSize: '11px', color: '#fca5a5', textTransform: 'uppercase', fontWeight: 700 }}>
+                Fleet Downtime / Inactive
               </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#ef4444' }}>
-                {summaryStats.downtimePct}%
+              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#f87171' }}>
+                {summaryStats.inactive} <span style={{ fontSize: '14px', color: '#fca5a5' }}>({summaryStats.downtimePct}%)</span>
               </div>
-              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
-                {summaryStats.inactive} Inactive occurrences
-              </small>
+              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{summaryStats.chronic} chronic defaulter logs</small>
             </div>
           </div>
 
-          {/* City-Wise Fleet Health Scorecard */}
-          {historyData.cityBreakdown && historyData.cityBreakdown.length > 0 && (
-            <div className="card" style={{ padding: '16px 20px', marginBottom: '20px', borderRadius: '12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
-                <div>
-                  <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Icon name="map" size={16} /> City-Wise Fleet Health &amp; Downtime Scorecard
-                  </h4>
-                  <small style={{ color: 'var(--text-muted)' }}>Click to filter single city, or toggle multiple sites simultaneously</small>
-                </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowBatchModal(true);
-                      setBatchTab('site');
-                    }}
-                    style={{
-                      background: 'rgba(59, 130, 246, 0.15)',
-                      border: '1px solid rgba(59, 130, 246, 0.4)',
-                      color: '#93c5fd',
-                      borderRadius: '6px',
-                      padding: '3px 10px',
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    ⚡ Compare Multiple Sites
-                  </button>
-                </div>
-              </div>
-
-              {/* Active Multi-Site Selection Banner */}
-              {selectedCities.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px', background: 'rgba(59, 130, 246, 0.15)', border: '1px solid #3b82f6', borderRadius: '8px', marginBottom: '12px', fontSize: '12px', color: '#93c5fd', flexWrap: 'wrap' }}>
-                  <span>🏙️ Active Multi-Site Filter: <b>{selectedCities.join(', ')}</b> ({selectedCities.length} sites)</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedCities([]);
-                      setSelectedCity('');
-                      handleSearch(searchTerm, '', searchField, []);
-                    }}
-                    style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '11px', textDecoration: 'underline', fontWeight: 600 }}
-                  >
-                    Clear Multi-Site Filter (Show All Fleet)
-                  </button>
-                </div>
-              )}
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px' }}>
-                {historyData.cityBreakdown.map((c) => {
-                  const isSelected = selectedCities.length > 0
-                    ? selectedCities.some(sc => sc.toLowerCase() === c.city.toLowerCase())
-                    : (selectedCity && selectedCity.toLowerCase() === c.city.toLowerCase());
-                  const uptime = parseFloat(c.uptimePct);
-                  const healthColor = uptime >= 90 ? '#10b981' : uptime >= 75 ? '#f59e0b' : '#ef4444';
-
-                  return (
-                    <div
-                      key={c.city}
-                      onClick={(e) => {
-                        if (e.shiftKey || e.ctrlKey || selectedCities.length > 0) {
-                          let nextCities;
-                          if (selectedCities.some(sc => sc.toLowerCase() === c.city.toLowerCase())) {
-                            nextCities = selectedCities.filter(sc => sc.toLowerCase() !== c.city.toLowerCase());
-                          } else {
-                            nextCities = [...selectedCities, c.city];
-                          }
-                          setSelectedCities(nextCities);
-                          setSelectedCity('');
-                          handleSearch(searchTerm, '', searchField, nextCities);
-                        } else {
-                          if (isSelected) {
-                            setSelectedCity('');
-                            setSelectedCities([]);
-                            handleSearch(searchTerm, '', searchField, []);
-                          } else {
-                            setSelectedCity(c.city);
-                            setSelectedCities([]);
-                            handleSearch(searchTerm, c.city, searchField, []);
-                          }
-                        }
-                      }}
-                      style={{
-                        padding: '12px 14px',
-                        borderRadius: '8px',
-                        border: isSelected ? '2px solid #3b82f6' : '1px solid var(--border-color)',
-                        background: isSelected ? 'rgba(59, 130, 246, 0.16)' : 'rgba(255, 255, 255, 0.02)',
-                        cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                        position: 'relative'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.borderColor = '#3b82f6'}
-                      onMouseLeave={(e) => {
-                        if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-color)';
-                      }}
-                      title="Click to filter by this city. Shift/Ctrl+Click to multi-select sites."
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <strong style={{ fontSize: '13px', color: isSelected ? '#60a5fa' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          {isSelected && <span>✓</span>} {c.city}
-                        </strong>
-                        <span style={{ fontSize: '11px', fontWeight: 700, color: healthColor }}>
-                          {c.uptimePct}%
-                        </span>
-                      </div>
-                      <div style={{ height: '4px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', overflow: 'hidden', margin: '6px 0' }}>
-                        <div style={{ height: '100%', width: `${c.uptimePct}%`, background: healthColor, borderRadius: '2px' }} />
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
-                        <span>{c.vehicles} vehicles</span>
-                        <span style={{ color: c.inactiveDays > 0 ? '#ef4444' : 'var(--text-muted)' }}>
-                          {c.inactiveDays} down
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Chronic Inactive Problem Vehicles Alert Banner */}
+          {/* Defaulter Alert Banner (Only if chronic vehicles exist) */}
           {historyData.chronicVehicles && historyData.chronicVehicles.length > 0 && (
             <div
               style={{
-                background: 'rgba(239, 68, 68, 0.12)',
-                border: '1px solid #ef4444',
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
                 borderRadius: '10px',
-                padding: '14px 18px',
-                marginBottom: '20px',
+                padding: '12px 16px',
+                marginBottom: '16px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 flexWrap: 'wrap',
-                gap: '12px'
+                gap: '10px'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <Icon name="alert" size={24} style={{ color: '#ef4444' }} />
-                <div>
-                  <strong style={{ color: '#fca5a5', fontSize: '14px' }}>
-                    🚨 {historyData.chronicVehicles.length} Vehicles Flagged as Chronic Inactive (3+ Consecutive Days Down):
-                  </strong>
-                  <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
-                    {historyData.chronicVehicles.slice(0, 5).map((cv, idx) => (
-                      <span
-                        key={idx}
-                        onClick={() => {
-                          setDossierVehicle({ vehicleName: cv.vehicle, city: cv.city, imei: cv.imei });
-                          setDossierTab('timeline');
-                        }}
-                        style={{
-                          background: 'rgba(239, 68, 68, 0.25)',
-                          border: '1px solid rgba(239, 68, 68, 0.5)',
-                          borderRadius: '6px',
-                          padding: '2px 8px',
-                          fontSize: '11px',
-                          color: '#fff',
-                          cursor: 'pointer',
-                          fontWeight: 600
-                        }}
-                        title={`Click to open 360° dossier: ${cv.vehicle} down for ${cv.streakDays} days (${cv.latestRemark || 'No remark'})`}
-                      >
-                        🚗 {cv.vehicle} ({cv.streakDays}d down)
-                      </span>
-                    ))}
-                    {historyData.chronicVehicles.length > 5 && (
-                      <span style={{ fontSize: '11px', color: '#fca5a5', alignSelf: 'center' }}>
-                        +{historyData.chronicVehicles.length - 5} more
-                      </span>
-                    )}
-                  </div>
-                </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '13px', color: '#fca5a5', fontWeight: 800 }}>🚨 Defaulter Alert:</span>
+                <span style={{ fontSize: '12px', color: '#fecaca' }}>
+                  {historyData.chronicVehicles.length} vehicles flagged with 3+ consecutive days downtime:
+                </span>
+                {historyData.chronicVehicles.slice(0, 5).map((cv, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setDossierVehicle({ vehicleName: cv.vehicle, city: cv.city, imei: cv.imei });
+                      setDossierTab('timeline');
+                    }}
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.25)',
+                      border: '1px solid rgba(239, 68, 68, 0.5)',
+                      borderRadius: '6px',
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                    title={`Click to open 360° dossier: ${cv.vehicle} down for ${cv.streakDays}d`}
+                  >
+                    🚗 {cv.vehicle} ({cv.streakDays}d down)
+                  </button>
+                ))}
               </div>
-
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  type="button"
-                  onClick={() => setStatusTabFilter('chronic')}
-                  style={{
-                    background: '#ef4444',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '6px',
-                    padding: '6px 12px',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: 'pointer'
-                  }}
-                >
-                  View Problem Vehicles
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusTabFilter('chronic');
+                  setCurrentPage(1);
+                }}
+                style={{
+                  background: '#ef4444',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '5px 12px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                Filter Defaulters in Table
+              </button>
             </div>
           )}
 
-          {/* Stale Technician Remark Alert */}
-          {historyData.repeatedRemarkWarning && (
+          {/* Hardware Movement Notice (Only when inspecting single IMEI reassigned) */}
+          {imeiJourney && imeiJourney.distinctVehicles && imeiJourney.distinctVehicles.length > 1 && (
             <div
               style={{
-                background: 'rgba(245, 158, 11, 0.12)',
-                border: '1px solid #f59e0b',
+                background: 'rgba(139, 92, 246, 0.1)',
+                border: '1px solid rgba(139, 92, 246, 0.35)',
                 borderRadius: '10px',
-                padding: '12px 18px',
-                marginBottom: '20px',
-                color: '#fcd34d',
-                fontSize: '13px',
+                padding: '12px 16px',
+                marginBottom: '16px',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '12px'
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '10px'
               }}
             >
-              <Icon name="alert" size={18} />
-              <div>
-                <strong>Technician Repeated Remark Flagged:</strong>
-                <span style={{ marginLeft: '6px', color: '#fef3c7' }}>
-                  {historyData.repeatedRemarkWarning}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '13px', color: '#d8b4fe', fontWeight: 800 }}>🔄 Hardware Notice:</span>
+                <span style={{ fontSize: '12px', color: '#c4b5fd' }}>
+                  IMEI <b>{imeiJourney.imei}</b> was reassigned across {imeiJourney.distinctVehicles.length} vehicles: {imeiJourney.distinctVehicles.map(v => v.vehicleName).join(' ➔ ')}.
                 </span>
               </div>
+              <span style={{ fontSize: '11px', color: '#a78bfa' }}>
+                All assignment dates are listed in the table below.
+              </span>
             </div>
           )}
 
@@ -3160,14 +2152,72 @@ export function VehicleHistoryView({
                   {copyFeedback ? 'Copied to Clipboard!' : '📲 Copy for WhatsApp'}
                 </button>
 
-                {/* Export CSV Button */}
+                {/* Download Excel (.xlsx) */}
                 <button
                   type="button"
-                  className="secondary-button"
-                  onClick={handleExportCsv}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 12px' }}
+                  onClick={handleExportAuditExcel}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '12px',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    background: 'linear-gradient(135deg, #10b981, #059669)',
+                    border: 'none',
+                    color: '#fff',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 6px rgba(16, 185, 129, 0.3)'
+                  }}
+                  title="Download complete audit records as Excel spreadsheet (.xlsx)"
                 >
-                  <Icon name="download" size={14} /> Export CSV
+                  📗 Download Excel (.xlsx)
+                </button>
+
+                {/* Download CSV (.csv) */}
+                <button
+                  type="button"
+                  onClick={handleExportAuditCsv}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '12px',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                    border: 'none',
+                    color: '#fff',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 6px rgba(37, 99, 235, 0.3)'
+                  }}
+                  title="Download complete audit records as CSV file (.csv)"
+                >
+                  📄 Download CSV (.csv)
+                </button>
+
+                {/* New Search */}
+                <button
+                  type="button"
+                  onClick={handleClearHistory}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '12px',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    border: '1px solid var(--border-color)',
+                    color: '#cbd5e1',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                  title="Reset audit and search another vehicle/site"
+                >
+                  🔄 New Search
                 </button>
 
                 {/* View Mode Toggle: Table vs Cards */}
