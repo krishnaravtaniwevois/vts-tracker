@@ -68,8 +68,10 @@ const STORAGE_KEY_CURRENT_USER = 'vts_tracker_current_user';
 const STORAGE_KEY_DATA_FILL = 'vts_tracker_data_fill';
 const STORAGE_KEY_CAMERA_FILL = 'vts_tracker_camera_fill';
 
+export const DEFAULT_API_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_APPS_SCRIPT_URL) || '';
+
 export function getStoredApiUrl() {
-  return localStorage.getItem(STORAGE_KEY_API_URL) || '';
+  return localStorage.getItem(STORAGE_KEY_API_URL) || DEFAULT_API_URL || '';
 }
 
 export function saveApiUrl(url) {
@@ -1061,10 +1063,12 @@ export async function fetchVehicleHistory(params) {
 
     // 2. Parse Selected Cities / Sites
     let selectedCities = [];
-    if (params.cities && Array.isArray(params.cities)) {
+    if (Array.isArray(params.cities) && params.cities.length > 0) {
       selectedCities = params.cities.map((c) => String(c).trim().toLowerCase()).filter(Boolean);
     } else if (params.cityFilter) {
       selectedCities = params.cityFilter.split(/[,;\n|]+/).map((c) => c.trim().toLowerCase()).filter(Boolean);
+    } else if (params.selectedCity) {
+      selectedCities = [params.selectedCity.trim().toLowerCase()].filter(Boolean);
     }
 
     const localDevs = safeGetJson(STORAGE_KEY_DEVICES) || initialDevices;
@@ -1443,7 +1447,14 @@ export async function fetchVehicleHistory(params) {
     };
   }
 
-  const cityFilterVal = Array.isArray(params.cities) ? params.cities.join(',') : (params.cityFilter || params.selectedCity || '');
+  let cityFilterVal = '';
+  if (Array.isArray(params.cities) && params.cities.length > 0) {
+    cityFilterVal = params.cities.join(',');
+  } else if (params.cityFilter) {
+    cityFilterVal = params.cityFilter;
+  } else if (params.selectedCity) {
+    cityFilterVal = params.selectedCity;
+  }
 
   const queryParams = new URLSearchParams({
     action: 'searchVehicleHistory',
