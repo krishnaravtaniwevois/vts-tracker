@@ -79,8 +79,12 @@ export function LoginScreen({ _users = [], onLoginSuccess }) {
           <div className="hero-artwork-overlay" />
 
           <div className="hero-content">
-            <div className="hero-top-badge">
-              <span className="badge-dot" />
+            <div className="hero-top-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+              <img
+                src="/wevois-logo.png"
+                alt="WeVOIS"
+                style={{ width: '20px', height: '20px', objectFit: 'contain', background: '#fff', borderRadius: '4px', padding: '1px' }}
+              />
               <span>WEVOIS TELEMATICS & IOT</span>
             </div>
 
@@ -116,11 +120,13 @@ export function LoginScreen({ _users = [], onLoginSuccess }) {
           <div className="form-inner-wrap">
             {/* Brand Header */}
             <div className="form-brand-header">
-              <div className="brand-badge-row">
-                <div className="brand-icon-circle">
-                  <Icon name="truck" size={20} />
-                </div>
-                <span className="brand-name-text">WeVois VTS</span>
+              <div className="brand-badge-row" style={{ display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
+                <img
+                  src="/wevois-logo.png"
+                  alt="WeVOIS Logo"
+                  style={{ width: '42px', height: '42px', objectFit: 'contain', borderRadius: '8px' }}
+                />
+                <span className="brand-name-text" style={{ fontSize: '18px', fontWeight: 800 }}>WeVOIS VTS</span>
               </div>
               <h2 className="welcome-title">Welcome Back</h2>
               <p className="welcome-subtext">

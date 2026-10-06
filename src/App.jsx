@@ -169,11 +169,15 @@ export function App() {
     <div className="app-shell">
       {/* Sidebar Navigation */}
       <aside className="sidebar">
-        <div className="brand" onClick={() => setActiveNav('Overview')}>
-          <span className="brand-mark">V</span>
+        <div className="brand" onClick={() => setActiveNav('Overview')} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <img
+            src="/wevois-logo.png"
+            alt="WeVOIS Logo"
+            style={{ width: '38px', height: '38px', objectFit: 'contain', background: '#fff', borderRadius: '8px', padding: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}
+          />
           <div className="brand-title">
-            <span>VTS <b>Tracker</b></span>
-            <small>Wevois Labs</small>
+            <span>WeVOIS <b>VTS</b></span>
+            <small>Fleet Intelligence</small>
           </div>
         </div>
 
