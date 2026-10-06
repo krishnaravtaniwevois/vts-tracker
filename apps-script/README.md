@@ -49,3 +49,34 @@ This script connects your 5 Google Sheets directly to the VTS Tracker Web App an
    - Time of day: **8am to 9am**
 4. Click **Save**. You will now receive daily automated emails!
 
+---
+
+### Step 6: Daily 4:45 PM File Save Trigger (Smart Single-File Overwrite)
+1. In Apps Script, open `Code.gs` and click **Run** on the function `setupDaily445Trigger`.
+2. Or in the Apps Script Triggers dashboard (alarm clock ⏰ icon):
+   - Click **+ Add Trigger**.
+   - Function to run: `saveDailySheetSnapshot`
+   - Event source: **Time-driven**
+   - Type: **Day timer**
+   - Time of day: **4pm to 5pm** (16:00 to 17:00 IST).
+   - Click **Save**.
+
+---
+
+### Step 7: Smart Overwrite Logic (Zero Duplicate Files!)
+* **How it works:**
+  - Whether run automatically at 4:45 PM or manually clicked:
+  - If you click at **12:00 PM**, it saves today's file (`VTS_Report_<Date>.csv`).
+  - If you click again at **1:00 PM**, it **deletes/trashes the 12:00 PM version** and saves the fresh 1:00 PM updated file!
+  - When the auto-trigger runs at **4:45 PM / 5:00 PM**, it replaces the earlier file again with the fresh 4:45 PM data!
+  - **Result:** You always have exactly **ONE single, up-to-date file** for that date in your Drive folder!
+
+---
+
+### Step 8: Custom Menu in Google Sheets
+When you open your Google Sheet, a custom menu **`🚀 VTS Tracker Hub`** appears with:
+- `💾 Save/Update Today's Report (Smart Overwrite)` — 1-click manual save/replace
+- `⏰ Setup Daily 4:45 PM Auto-Save Trigger` — 1-click trigger setup
+- `🛡️ Protect Column H Formula` — Locks Column H from accidental edits
+- `🔍 Search Vehicle History` — Instant historical lookup
+

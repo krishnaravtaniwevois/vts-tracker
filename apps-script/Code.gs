@@ -81,6 +81,8 @@ function doGet(e) {
     else if (action === 'getGroundVehicleRecords' || action === 'getGroundAudit') result = getGroundVehicleRecords();
     else if (action === 'getMorningFleetDigest') result = getMorningFleetDigest();
     else if (action === 'searchVehicleHistory') result = searchVehicleHistoryApi(e ? e.parameter : {});
+    else if (action === 'saveDailySnapshot') result = saveDailySheetSnapshot(e ? e.parameter : {});
+    else if (action === 'setupDailySaveTrigger') result = setupDaily445Trigger();
     else result = { status: 'error', message: 'Unknown action: ' + action };
 
     return ContentService.createTextOutput(JSON.stringify({
@@ -121,7 +123,7 @@ function doPost(e) {
       'applyBatchRenewals', 'batchUpdateLicenseDates', 'finalizeRenewalSession', 'saveUser',
       'deleteUser', 'submitRequirementRequest', 'submitReturnRequest', 'refreshFinalStatus',
       'protectColumnH', 'updateStatusOverride', 'updateInactiveRunningRemark', 'setActiveRenewalCycleTab',
-      'setRenewalSheetUrl'
+      'setRenewalSheetUrl', 'saveDailySnapshot', 'setupDailySaveTrigger'
     ];
 
     var executeAction = function() {
@@ -153,6 +155,8 @@ function doPost(e) {
       if (action === 'sendNotification') return sendCustomNotification(payload);
       if (action === 'searchVehicleHistory') return searchVehicleHistoryApi(payload);
       if (action === 'setupMorningFleetTrigger') return setupMorningFleetTrigger();
+      if (action === 'saveDailySnapshot') return saveDailySheetSnapshot(payload);
+      if (action === 'setupDailySaveTrigger') return setupDaily445Trigger();
       return { success: false, message: 'Invalid action: ' + action };
     };
 
@@ -4140,4 +4144,195 @@ function setupMorningFleetTrigger() {
     .create();
 
   return { success: true, message: 'Daily 8:30 AM Morning Fleet Trigger created successfully!' };
+}
+
+/**
+ * ============================================================================
+ * SMART DAILY FILE SAVE & SNAPSHOT ENGINE (SINGLE VERSION PER DAY)
+ * ============================================================================
+ * Trigger Target: 4:45 PM IST (16:45)
+ * Key Rule: ONLY ONE SNAPSHOT PER DAY.
+ * - If user saves at 12:00 PM, a file is saved for today.
+ * - If user clicks again at 1:00 PM, previous 12:00 PM file for today is TRASHED/REPLACED!
+ * - If 4:45 PM automatic trigger fires, it updates/replaces again with 4:45 PM data!
+ * - At the end of the day, there is always exactly ONE updated file for that date.
+ * ============================================================================
+ */
+function saveDailySheetSnapshot(payload) {
+  try {
+    var timeZone = Session.getScriptTimeZone() || 'Asia/Kolkata';
+    var today = new Date();
+    
+    // Format date tag matching Drive daily reports: e.g. "6_Oct_2026" or "06_Oct_2026"
+    var dateTagStandard = Utilities.formatDate(today, timeZone, "d_MMM_yyyy");
+    var dateTagPadded   = Utilities.formatDate(today, timeZone, "dd_MMM_yyyy");
+    var standardFileName = "VTS_Report_" + dateTagStandard + ".csv";
+    
+    var folderId = VTS_CONFIG.DAILY_REPORTS_FOLDER_ID || '1WqrIXW7abqYzCug_xz4LbzVag2plBDnB';
+    var folder = DriveApp.getFolderById(folderId);
+
+    // 1. SEARCH FOR EXISTING FILES FOR TODAY IN DRIVE FOLDER
+    var existingFiles = folder.getFiles();
+    var filesToTrash = [];
+    while (existingFiles.hasNext()) {
+      var f = existingFiles.next();
+      var fName = f.getName();
+      // Match today's files: "VTS_Report_6_Oct_2026.csv" or "VTS_Report_06_Oct_2026.csv"
+      if (
+        fName === standardFileName ||
+        fName === ("VTS_Report_" + dateTagPadded + ".csv") ||
+        fName.indexOf("VTS_Report_" + dateTagStandard) === 0 ||
+        fName.indexOf("VTS_Report_" + dateTagPadded) === 0
+      ) {
+        filesToTrash.push(f);
+      }
+    }
+
+    // 2. TRASH / DELETE PREVIOUS SAVES FROM TODAY (Smart Overwrite - No Duplicates!)
+    var replacedNames = [];
+    for (var i = 0; i < filesToTrash.length; i++) {
+      replacedNames.push(filesToTrash[i].getName());
+      filesToTrash[i].setTrashed(true);
+      Logger.log("🗑️ Trashed previous version of today's file: " + filesToTrash[i].getName());
+    }
+
+    // 3. READ LATEST DATA FROM MASTER SHEET ("900" tab)
+    var ss = safeOpenSpreadsheet(VTS_CONFIG.MASTER_SHEET);
+    var masterSheet = getMasterSheetStrict(ss);
+    if (!masterSheet) throw new Error("Master Sheet '900' not found!");
+
+    var data = masterSheet.getDataRange().getValues();
+    if (data.length === 0) throw new Error("Master Sheet has no data!");
+
+    // Convert 2D array to CSV text format
+    var csvRows = [];
+    for (var r = 0; r < data.length; r++) {
+      var row = data[r];
+      var cells = [];
+      for (var c = 0; c < row.length; c++) {
+        var val = row[c];
+        if (val instanceof Date) {
+          val = Utilities.formatDate(val, timeZone, "yyyy-MM-dd HH:mm:ss");
+        } else {
+          val = String(val !== null && val !== undefined ? val : '');
+        }
+        if (val.indexOf(',') !== -1 || val.indexOf('"') !== -1 || val.indexOf('\n') !== -1 || val.indexOf('\r') !== -1) {
+          val = '"' + val.replace(/"/g, '""') + '"';
+        }
+        cells.push(val);
+      }
+      csvRows.push(cells.join(','));
+    }
+    var csvContent = csvRows.join('\r\n');
+
+    // 4. CREATE FRESH CSV FILE IN DRIVE
+    var newFile = folder.createFile(standardFileName, csvContent, MimeType.CSV);
+
+    // 5. (OPTIONAL) UPDATE TAB IN SPREADSHEET IF REQUESTED
+    var tabUpdated = null;
+    if (payload && (payload.saveSheetTab || payload.createTab)) {
+      var tabName = Utilities.formatDate(today, timeZone, "d MMM yyyy");
+      var targetSS = ss;
+      var existingTab = targetSS.getSheetByName(tabName);
+      if (existingTab) {
+        existingTab.clear();
+        existingTab.getRange(1, 1, data.length, data[0].length).setValues(data);
+        tabUpdated = tabName + " (Updated in place)";
+      } else {
+        var newTab = targetSS.insertSheet(tabName);
+        newTab.getRange(1, 1, data.length, data[0].length).setValues(data);
+        tabUpdated = tabName + " (Created fresh)";
+      }
+    }
+
+    var timeStr = Utilities.formatDate(today, timeZone, "hh:mm a, dd MMM yyyy");
+    PropertiesService.getScriptProperties().setProperty('LAST_DAILY_SAVE_TIMESTAMP', timeStr);
+    PropertiesService.getScriptProperties().setProperty('LAST_DAILY_SAVE_FILE_URL', newFile.getUrl());
+
+    Logger.log("✅ Successfully saved updated snapshot: " + standardFileName + " at " + timeStr);
+
+    return {
+      success: true,
+      message: "Today's sheet successfully saved/updated at " + timeStr + "! (" + (filesToTrash.length > 0 ? (filesToTrash.length + " previous version replaced") : "First save of today") + ")",
+      fileName: standardFileName,
+      fileUrl: newFile.getUrl(),
+      replacedCount: filesToTrash.length,
+      tabUpdated: tabUpdated,
+      timestamp: timeStr,
+      totalRows: data.length
+    };
+  } catch (err) {
+    Logger.log("❌ Error in saveDailySheetSnapshot: " + err.toString());
+    return { success: false, error: err.toString() };
+  }
+}
+
+/**
+ * Configure Daily 4:45 PM IST Trigger
+ * Runs daily at 16:00-17:00 IST (4:45 PM window)
+ */
+function setupDaily445Trigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    var fn = triggers[i].getHandlerFunction();
+    if (fn === 'saveDailySheetSnapshot' || fn === 'menuSaveTodaySnapshot') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  // Time-driven trigger for 4:00 PM - 5:00 PM (16:00 IST window)
+  ScriptApp.newTrigger('saveDailySheetSnapshot')
+    .timeBased()
+    .everyDays(1)
+    .atHour(16) // 4:00 PM to 5:00 PM (16:00 - 17:00 IST)
+    .inTimezone('Asia/Kolkata')
+    .create();
+
+  return {
+    success: true,
+    message: 'Daily 4:45 PM (16:00-17:00 IST) trigger configured successfully! Previous duplicate triggers cleared.'
+  };
+}
+
+/**
+ * Custom Menu inside Google Sheets for 1-Click Operations
+ */
+function onOpen() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.createMenu('🚀 VTS Tracker Hub')
+      .addItem('💾 Save/Update Today\'s Report (Smart Overwrite)', 'menuSaveTodaySnapshot')
+      .addItem('⏰ Setup Daily 4:45 PM Auto-Save Trigger', 'menuSetupDailyTrigger')
+      .addSeparator()
+      .addItem('🛡️ Protect Column H Formula', 'menuProtectColumnH')
+      .addItem('🔍 Search Vehicle History', 'searchVehicleHistory')
+      .addToUi();
+  } catch (e) {
+    Logger.log("Menu creation skipped (not container-bound): " + e.toString());
+  }
+}
+
+function menuSaveTodaySnapshot() {
+  var res = saveDailySheetSnapshot();
+  var ui = SpreadsheetApp.getUi();
+  if (res.success) {
+    ui.alert('✓ Success!', res.message + '\nFile: ' + res.fileName, ui.ButtonSet.OK);
+  } else {
+    ui.alert('❌ Error', 'Could not save file: ' + res.error, ui.ButtonSet.OK);
+  }
+}
+
+function menuSetupDailyTrigger() {
+  var res = setupDaily445Trigger();
+  var ui = SpreadsheetApp.getUi();
+  ui.alert('⏰ Trigger Configured', res.message, ui.ButtonSet.OK);
+}
+
+function menuProtectColumnH() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getMasterSheetStrict(ss);
+  if (sheet) {
+    ensureColumnHProtected(sheet);
+    SpreadsheetApp.getUi().alert('🛡️ Protected', 'Column H formulas have been locked and protected against accidental edits.', SpreadsheetApp.getUi().ButtonSet.OK);
+  }
 }

@@ -2128,5 +2128,56 @@ export async function fetchMorningFleetDigest() {
   }
 }
 
+/**
+ * 1-Click Manual Save / Update of Today's Sheet Snapshot (Smart Overwrite)
+ */
+export async function saveDailySnapshotApi(payload = {}) {
+  const apiUrl = getStoredApiUrl();
+  if (!apiUrl) {
+    throw new Error('Google Apps Script URL is not configured. Please set it in Settings.');
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'saveDailySnapshot',
+        ...payload
+      })
+    });
+    const result = await response.json();
+    return result;
+  } catch (err) {
+    console.error('Error saving daily snapshot via Apps Script:', err);
+    throw err;
+  }
+}
+
+/**
+ * Configure Daily 4:45 PM Auto-Save Trigger in Apps Script
+ */
+export async function setupDailySaveTriggerApi() {
+  const apiUrl = getStoredApiUrl();
+  if (!apiUrl) {
+    throw new Error('Google Apps Script URL is not configured. Please set it in Settings.');
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'setupDailySaveTrigger'
+      })
+    });
+    const result = await response.json();
+    return result;
+  } catch (err) {
+    console.error('Error setting daily save trigger:', err);
+    throw err;
+  }
+}
+
 
 
