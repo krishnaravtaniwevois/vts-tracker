@@ -1211,19 +1211,172 @@ export function VehicleHistoryView({
     exportToExcelFile(formatted, `WeVOIS_Fleet_Audit_${(selectedCity || 'AllSites')}`);
   };
 
+  // Dynamic KPIs that react in REAL TIME to Search, City filter, and History Results
+  const dynamicKPIs = useMemo(() => {
+    // Mode 1: Historical Audit is active (historyData loaded)
+    if (historyData && historyData.results) {
+      const results = historyData.results;
+      const total = results.length;
+      let active = 0;
+      let inactive = 0;
+      let chronic = 0;
+      const vehSet = new Set();
+      results.forEach((r) => {
+        const isAct = (r.roadcastStatus || '').toLowerCase() === 'active';
+        if (isAct) active++;
+        else inactive++;
+        if (r.isChronicInactive || (r.inactiveStreak && r.inactiveStreak >= 3)) chronic++;
+        const vKey = r.vehicleName || r.vehicle || r.imei;
+        if (vKey) vehSet.add(vKey);
+      });
+      const uptimePct = total > 0 ? Math.round((active / total) * 100) : 0;
+      const downtimePct = total > 0 ? (100 - uptimePct) : 0;
+
+      const scopeText = selectedCity 
+        ? `Audited: ${selectedCity}`
+        : selectedCities.length > 0 
+          ? `Audited: ${selectedCities.length} Sites`
+          : (searchTerm.trim() ? `Audited: "${searchTerm.trim()}"` : 'Audit Results');
+
+      return {
+        isAudit: true,
+        scopeText,
+        matchingDevices: [],
+        card1: {
+          label: 'Total Audit Logs',
+          value: total.toLocaleString(),
+          sub: 'Matching daily tracking records',
+          color: '#3b82f6',
+          bg: 'rgba(59, 130, 246, 0.08)',
+          border: 'rgba(59, 130, 246, 0.25)'
+        },
+        card2: {
+          label: 'Audited Vehicles',
+          value: vehSet.size.toLocaleString(),
+          sub: 'Unique fleet vehicles audited',
+          color: '#a855f7',
+          bg: 'rgba(168, 85, 247, 0.08)',
+          border: 'rgba(168, 85, 247, 0.25)'
+        },
+        card3: {
+          label: 'Historical Uptime',
+          value: `${active.toLocaleString()} (${uptimePct}%)`,
+          sub: 'Active operational logs',
+          color: '#10b981',
+          bg: 'rgba(16, 185, 129, 0.08)',
+          border: 'rgba(16, 185, 129, 0.25)'
+        },
+        card4: {
+          label: 'Downtime / Defaulter',
+          value: `${inactive.toLocaleString()} (${downtimePct}%)`,
+          sub: chronic > 0 ? `${chronic} chronic defaulter logs` : 'Offline / inactive records',
+          color: '#ef4444',
+          bg: 'rgba(239, 68, 68, 0.08)',
+          border: 'rgba(239, 68, 68, 0.25)'
+        }
+      };
+    }
+
+    // Mode 2: Live Fleet Scope (reacts dynamically to selectedCity, selectedCities, and searchTerm)
+    let scoped = devices || [];
+    let scopeLabel = 'Entire Fleet (All Sites)';
+
+    // Filter by city if selected
+    if (selectedCity) {
+      scoped = scoped.filter((d) => (d.city || '').toLowerCase() === selectedCity.toLowerCase());
+      scopeLabel = `Site: ${selectedCity}`;
+    } else if (selectedCities.length > 0) {
+      const citySet = new Set(selectedCities.map((c) => c.toLowerCase()));
+      scoped = scoped.filter((d) => citySet.has((d.city || '').toLowerCase()));
+      scopeLabel = `Sites: ${selectedCities.length} Selected`;
+    }
+
+    // Filter by searchTerm if typed
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase().trim();
+      scoped = scoped.filter((d) => {
+        const v = String(d.vehicle || '').toLowerCase();
+        const im = String(d.imei || '').toLowerCase();
+        const s = String(d.sim || d.phone || '').toLowerCase();
+        const c = String(d.city || '').toLowerCase();
+        return v.includes(q) || im.includes(q) || s.includes(q) || c.includes(q);
+      });
+      scopeLabel = selectedCity || selectedCities.length > 0
+        ? `${scopeLabel} • Filter: "${searchTerm.trim()}"`
+        : `Filter: "${searchTerm.trim()}"`;
+    }
+
+    const total = scoped.length;
+    let active = 0;
+    let inactive = 0;
+    let defaulters = 0;
+
+    scoped.forEach((d) => {
+      const roadcast = String(d.roadcastStatus || '').toLowerCase();
+      const finalSt = String(d.finalStatus || '').toLowerCase();
+      const isAct = roadcast === 'active' || finalSt === 'running' || finalSt === 'active';
+      if (isAct) active++;
+      else inactive++;
+      if (roadcast === 'inactive' || finalSt === 'inactive' || finalSt === 'damaged') {
+        defaulters++;
+      }
+    });
+
+    const uptimePct = total > 0 ? Math.round((active / total) * 100) : 0;
+    const downtimePct = total > 0 ? (100 - uptimePct) : 0;
+
+    return {
+      isAudit: false,
+      scopeText: scopeLabel,
+      matchingDevices: scoped,
+      card1: {
+        label: (searchTerm.trim() || selectedCity || selectedCities.length > 0) ? 'Matching Fleet' : 'Total Fleet',
+        value: total.toLocaleString(),
+        sub: (searchTerm.trim() || selectedCity || selectedCities.length > 0) ? 'Vehicles in current search scope' : `Across ${fleetCities.length} Project Sites`,
+        color: '#3b82f6',
+        bg: 'rgba(59, 130, 246, 0.08)',
+        border: 'rgba(59, 130, 246, 0.25)'
+      },
+      card2: {
+        label: 'Active Fleet Uptime',
+        value: `${active.toLocaleString()} (${uptimePct}%)`,
+        sub: 'Operational & Live streaming',
+        color: '#10b981',
+        bg: 'rgba(16, 185, 129, 0.08)',
+        border: 'rgba(16, 185, 129, 0.25)'
+      },
+      card3: {
+        label: 'Fleet Downtime',
+        value: `${inactive.toLocaleString()} (${downtimePct}%)`,
+        sub: 'Offline or Unreachable',
+        color: '#ef4444',
+        bg: 'rgba(239, 68, 68, 0.08)',
+        border: 'rgba(239, 68, 68, 0.25)'
+      },
+      card4: {
+        label: 'Defaulter Watchlist',
+        value: defaulters.toLocaleString(),
+        sub: 'Needs technician inspection',
+        color: '#f59e0b',
+        bg: 'rgba(245, 158, 11, 0.08)',
+        border: 'rgba(245, 158, 11, 0.25)'
+      }
+    };
+  }, [historyData, devices, selectedCity, selectedCities, searchTerm, fleetCities.length]);
+
   return (
     <div className="view-container">
       {/* Header Banner & Executive Action Bar */}
-      <div className="page-heading" style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+      <div className="page-heading" style={{ marginBottom: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '14px' }}>
         <div>
           <div className="modal-eyebrow" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Icon name="history" size={14} /> FLEET INTELLIGENCE &amp; 360° VEHICLE AUDIT
           </div>
           <h2 style={{ fontSize: '24px', fontWeight: 800, margin: '4px 0 6px 0', color: 'var(--text-main)' }}>
-            Vehicle History &amp; Fleet Downtime Intelligence
+            Vehicle History &amp; Fleet Intelligence
           </h2>
           <p className="subheading" style={{ margin: 0 }}>
-            Executive fleet monitoring, 360° vehicle lifecycle audits, site uptime rankings, and chronic defaulter detection.
+            Audit daily vehicle logs, track hardware movements, analyze uptime streaks, and inspect timeline records.
           </p>
         </div>
 
@@ -1292,103 +1445,73 @@ export function VehicleHistoryView({
           >
             📊 Export Excel
           </button>
-
-          <button
-            type="button"
-            onClick={handleAuditAllFleet}
-            style={{
-              padding: '8px 16px',
-              fontSize: '12px',
-              fontWeight: 700,
-              borderRadius: '8px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
-              border: 'none',
-              color: '#fff',
-              cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)'
-            }}
-            title="1-Click Audit across all municipal sites"
-          >
-            🚀 Audit All Sites
-          </button>
         </div>
       </div>
 
-      {/* Executive Fleet Health Cockpit (6 Premium KPI Tiles - ALWAYS VISIBLE) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '22px' }}>
-        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(37, 99, 235, 0.08)', border: '1px solid rgba(37, 99, 235, 0.25)' }}>
-          <div style={{ fontSize: '11px', fontWeight: 800, color: '#93c5fd', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            🚗 Total Monitored Fleet
+      {/* Dynamic Search-Reactive Fleet Health KPI Strip (4 Adaptive Cards) */}
+      <div style={{ marginBottom: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', padding: '0 2px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 800, color: '#93c5fd', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              CURRENT SCOPE:
+            </span>
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              background: dynamicKPIs.isAudit ? 'rgba(16, 185, 129, 0.2)' : 'rgba(59, 130, 246, 0.15)',
+              border: `1px solid ${dynamicKPIs.isAudit ? 'rgba(16, 185, 129, 0.4)' : 'rgba(59, 130, 246, 0.3)'}`,
+              color: dynamicKPIs.isAudit ? '#34d399' : '#93c5fd',
+              padding: '2px 8px',
+              borderRadius: '6px'
+            }}>
+              📍 {dynamicKPIs.scopeText}
+            </span>
           </div>
-          <div style={{ fontSize: '26px', fontWeight: 900, color: '#fff', marginTop: '4px' }}>
-            {fleetStats.total}
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Across {fleetCities.length} Project Sites
-          </div>
+          {(searchTerm.trim() || selectedCity || selectedCities.length > 0 || historyData) && (
+            <button
+              type="button"
+              onClick={handleClearHistory}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#60a5fa',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              🔄 Reset to Entire Fleet
+            </button>
+          )}
         </div>
 
-        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
-          <div style={{ fontSize: '11px', fontWeight: 800, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            🟢 Active Uptime
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 900, color: '#34d399', marginTop: '4px' }}>
-            {fleetStats.active} <span style={{ fontSize: '13px', fontWeight: 700, color: '#86efac' }}>({fleetStats.uptimePct}%)</span>
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Operational &amp; Live Streaming
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
-          <div style={{ fontSize: '11px', fontWeight: 800, color: '#fca5a5', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            🔴 Fleet Downtime
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 900, color: '#f87171', marginTop: '4px' }}>
-            {fleetStats.inactive} <span style={{ fontSize: '13px', fontWeight: 700, color: '#fca5a5' }}>({fleetStats.downtimePct}%)</span>
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Offline or Unreachable
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)' }}>
-          <div style={{ fontSize: '11px', fontWeight: 800, color: '#fcd34d', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            ⚠️ Defaulter Watchlist
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 900, color: '#fbbf24', marginTop: '4px' }}>
-            {chronicVehiclesList.length}
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Needs Technician Inspection
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(168, 85, 247, 0.08)', border: '1px solid rgba(168, 85, 247, 0.25)' }}>
-          <div style={{ fontSize: '11px', fontWeight: 800, color: '#d8b4fe', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            🔧 Workshop / Returns
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 900, color: '#c084fc', marginTop: '4px' }}>
-            {pendingReturnsList.length}
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Hardware Repair Logs
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(14, 165, 233, 0.08)', border: '1px solid rgba(14, 165, 233, 0.25)' }}>
-          <div style={{ fontSize: '11px', fontWeight: 800, color: '#7dd3fc', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            ⚡ Recharge Expiry
-          </div>
-          <div style={{ fontSize: '26px', fontWeight: 900, color: '#38bdf8', marginTop: '4px' }}>
-            {fleetStats.expiringSoon}
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Expiring in &le; 15 Days
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+          {[dynamicKPIs.card1, dynamicKPIs.card2, dynamicKPIs.card3, dynamicKPIs.card4].map((c, idx) => (
+            <div
+              key={idx}
+              className="card"
+              style={{
+                padding: '14px 16px',
+                borderRadius: '12px',
+                background: c.bg,
+                border: `1px solid ${c.border}`,
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ fontSize: '11px', fontWeight: 800, color: c.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                {c.label}
+              </div>
+              <div style={{ fontSize: '24px', fontWeight: 900, color: '#fff', marginTop: '4px' }}>
+                {c.value}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                {c.sub}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -1904,49 +2027,6 @@ export function VehicleHistoryView({
               >
                 🔄 Clear / New Search
               </button>
-            </div>
-          </div>
-
-          {/* Executive 4-KPI Summary Strip */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px', marginBottom: '18px' }}>
-            <div className="card" style={{ padding: '16px', borderRadius: '12px', borderLeft: '4px solid #3b82f6', background: 'var(--card-bg)' }}>
-              <div style={{ fontSize: '11px', color: '#93c5fd', textTransform: 'uppercase', fontWeight: 700 }}>
-                Total Audit Records
-              </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#fff' }}>
-                {summaryStats.total}
-              </div>
-              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Matching daily report rows</small>
-            </div>
-
-            <div className="card" style={{ padding: '16px', borderRadius: '12px', borderLeft: '4px solid #8b5cf6', background: 'var(--card-bg)' }}>
-              <div style={{ fontSize: '11px', color: '#c084fc', textTransform: 'uppercase', fontWeight: 700 }}>
-                Unique Fleet Vehicles
-              </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#c084fc' }}>
-                {summaryStats.uniqueVehicles}
-              </div>
-              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Distinct vehicles audited</small>
-            </div>
-
-            <div className="card" style={{ padding: '16px', borderRadius: '12px', borderLeft: '4px solid #10b981', background: 'var(--card-bg)' }}>
-              <div style={{ fontSize: '11px', color: '#86efac', textTransform: 'uppercase', fontWeight: 700 }}>
-                Active Fleet Uptime
-              </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#34d399' }}>
-                {summaryStats.active} <span style={{ fontSize: '14px', color: '#86efac' }}>({summaryStats.uptimePct}%)</span>
-              </div>
-              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Operational &amp; live streaming</small>
-            </div>
-
-            <div className="card" style={{ padding: '16px', borderRadius: '12px', borderLeft: '4px solid #ef4444', background: 'var(--card-bg)' }}>
-              <div style={{ fontSize: '11px', color: '#fca5a5', textTransform: 'uppercase', fontWeight: 700 }}>
-                Fleet Downtime / Inactive
-              </div>
-              <div style={{ fontSize: '28px', fontWeight: 800, marginTop: '4px', color: '#f87171' }}>
-                {summaryStats.inactive} <span style={{ fontSize: '14px', color: '#fca5a5' }}>({summaryStats.downtimePct}%)</span>
-              </div>
-              <small style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{summaryStats.chronic} chronic defaulter logs</small>
             </div>
           </div>
 
@@ -3659,274 +3739,201 @@ export function VehicleHistoryView({
         </div>
       )}
 
-      {/* Initial Executive Cockpit (Rendered when no active search query is displayed) */}
+      {/* Dynamic Vehicle Finder & Clean Search Hub */}
       {!loadingHistory && !historyData && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {/* Section 1: Site-Wise Fleet Uptime & Health Scorecard */}
-          <div className="card" style={{ padding: '22px', borderRadius: '14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
-              <div>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
-                  FLEET SITES AUDIT LEADERBOARD
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Active Search / City Filter Preview Table */}
+          {(searchTerm.trim() || selectedCity || selectedCities.length > 0) ? (
+            <div className="card" style={{ padding: '22px', borderRadius: '14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '11px', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                    QUICK FLEET FINDER &bull; {dynamicKPIs.matchingDevices.length} VEHICLE{dynamicKPIs.matchingDevices.length === 1 ? '' : 'S'} IN SCOPE
+                  </div>
+                  <h3 style={{ margin: '3px 0 0 0', fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
+                    Vehicles Matching Search Scope
+                  </h3>
+                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Click <b>🔍 Audit History</b> to load full historical Drive CSV logs for any vehicle, or audit all matching vehicles.
+                  </p>
                 </div>
-                <h3 style={{ margin: '2px 0 0 0', fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
-                  🏙️ Municipal Project Sites &amp; Real-Time Uptime Scorecard
-                </h3>
-                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Ranked breakdown across {fleetStats.cities.length} operational sites. Click <b>⚡ Audit Site</b> to inspect deep historical records for any city.
-                </p>
+
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleSearch()}
+                    className="primary-button"
+                    style={{ padding: '8px 16px', fontSize: '12px', fontWeight: 700, borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    🚀 Run Deep Audit ({dynamicKPIs.matchingDevices.length} Vehicles)
+                  </button>
+                </div>
               </div>
 
-              <button
-                type="button"
-                onClick={handleAuditAllFleet}
-                className="primary-button"
-                style={{ padding: '6px 14px', fontSize: '12px', fontWeight: 700, borderRadius: '8px' }}
-              >
-                🚀 Audit All {fleetStats.cities.length} Sites (Full Fleet)
-              </button>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
-              {fleetStats.cities.map((c) => {
-                const uptimeColor = c.uptimePct >= 90 ? '#34d399' : c.uptimePct >= 75 ? '#f59e0b' : '#f87171';
-                return (
-                  <div
-                    key={c.city}
-                    style={{
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      borderRadius: '10px',
-                      padding: '14px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      transition: 'transform 0.15s ease, border-color 0.15s ease'
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <span style={{ fontSize: '14px', fontWeight: 800, color: '#fff' }}>
-                          📍 {c.city}
-                        </span>
-                        <span style={{ fontSize: '13px', fontWeight: 800, color: uptimeColor }}>
-                          {c.uptimePct}% Uptime
-                        </span>
-                      </div>
-
-                      {/* Progress bar */}
-                      <div style={{ height: '6px', width: '100%', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
-                        <div style={{ height: '100%', width: `${c.uptimePct}%`, background: uptimeColor, borderRadius: '3px' }} />
-                      </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                        <span>Total: <b>{c.total}</b></span>
-                        <span style={{ color: '#34d399' }}>Active: <b>{c.active}</b></span>
-                        <span style={{ color: '#f87171' }}>Down: <b>{c.inactive}</b></span>
-                      </div>
+              {dynamicKPIs.matchingDevices.length === 0 ? (
+                <div style={{ padding: '36px 20px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔍</div>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)' }}>No vehicles found matching your search</div>
+                  <div style={{ fontSize: '12px', marginTop: '4px' }}>Try searching by vehicle number (e.g. RJ14), IMEI, SIM, or clearing the city filter.</div>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(255,255,255,0.04)', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                        <th style={{ padding: '10px 14px' }}>#</th>
+                        <th style={{ padding: '10px 14px' }}>Vehicle Name</th>
+                        <th style={{ padding: '10px 14px' }}>Site / City</th>
+                        <th style={{ padding: '10px 14px' }}>IMEI Number</th>
+                        <th style={{ padding: '10px 14px' }}>SIM / Phone</th>
+                        <th style={{ padding: '10px 14px' }}>Current Status</th>
+                        <th style={{ padding: '10px 14px' }}>Last Seen</th>
+                        <th style={{ padding: '10px 14px', textAlign: 'center' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dynamicKPIs.matchingDevices.slice(0, 15).map((v, idx) => {
+                        const isAct = String(v.roadcastStatus || '').toLowerCase() === 'active' || String(v.finalStatus || '').toLowerCase() === 'running';
+                        return (
+                          <tr key={v.imei || idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                            <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{idx + 1}</td>
+                            <td style={{ padding: '10px 14px', fontWeight: 800, color: 'var(--text-main)' }}>
+                              🚗 {v.vehicle || 'Unknown'}
+                            </td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
+                                {v.city || '—'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: '#cbd5e1' }}>
+                              {v.imei || '—'}
+                            </td>
+                            <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
+                              {v.sim || v.phone || '—'}
+                            </td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <span style={{
+                                background: isAct ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                                border: `1px solid ${isAct ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+                                color: isAct ? '#34d399' : '#f87171',
+                                padding: '2px 8px',
+                                borderRadius: '10px',
+                                fontSize: '11px',
+                                fontWeight: 700
+                              }}>
+                                {isAct ? 'Active' : 'Inactive'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 14px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                              {v.lastUpdate || v.date || '—'}
+                            </td>
+                            <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                              <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAuditVehicle(v.vehicle, v.imei)}
+                                  style={{
+                                    background: 'rgba(59, 130, 246, 0.2)',
+                                    border: '1px solid #3b82f6',
+                                    color: '#93c5fd',
+                                    padding: '4px 10px',
+                                    borderRadius: '6px',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                  }}
+                                  title="Audit historical daily CSV logs for this vehicle"
+                                >
+                                  🔍 Audit History
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDossierFromDevice(v)}
+                                  style={{
+                                    background: 'rgba(168, 85, 247, 0.2)',
+                                    border: '1px solid #a855f7',
+                                    color: '#d8b4fe',
+                                    padding: '4px 10px',
+                                    borderRadius: '6px',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer'
+                                  }}
+                                  title="Open 360° vehicle lifecycle dossier modal"
+                                >
+                                  📋 360° Dossier
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {dynamicKPIs.matchingDevices.length > 15 && (
+                    <div style={{ padding: '10px 14px', textAlign: 'center', background: 'rgba(255,255,255,0.02)', fontSize: '12px', color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                      Showing top 15 of {dynamicKPIs.matchingDevices.length} matching vehicles. Click <b>"Run Deep Audit"</b> to load historical records for all.
                     </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Clean, elegant Quick Search Guide & Site Pills (Default State) */
+            <div className="card" style={{ padding: '40px 24px', borderRadius: '16px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', textAlign: 'center' }}>
+              <div style={{ display: 'inline-flex', padding: '16px', borderRadius: '50%', background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', marginBottom: '14px' }}>
+                <Icon name="search" size={32} />
+              </div>
+              <h3 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-main)', margin: '0 0 6px 0' }}>
+                Search Vehicle History &amp; Audit Logs
+              </h3>
+              <p style={{ maxWidth: '580px', margin: '0 auto 20px auto', fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.6' }}>
+                Enter a <b>Vehicle Number (e.g. RJ14...)</b>, <b>IMEI</b>, or select a <b>Municipal Site</b> in the search bar above, then click <b>🔍 Confirm &amp; Search</b> to load day-by-day historical records, uptime streaks, and hardware movements.
+              </p>
 
+              {/* Quick Site Chips */}
+              <div style={{ maxWidth: '720px', margin: '0 auto', textAlign: 'left', background: 'rgba(255,255,255,0.02)', padding: '16px 20px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: '#93c5fd', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>⚡ Quick Site Shortcuts (Click to select &amp; view):</span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {fleetCities.slice(0, 12).map((city) => (
                     <button
+                      key={city}
                       type="button"
-                      onClick={() => handleAuditCity(c.city)}
+                      onClick={() => {
+                        setSelectedCity(city);
+                        setSelectedCities([]);
+                        setSearchField('city');
+                        setSearchTerm('');
+                      }}
                       style={{
-                        width: '100%',
-                        padding: '6px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid rgba(59, 130, 246, 0.35)',
-                        background: 'rgba(59, 130, 246, 0.12)',
+                        padding: '6px 14px',
+                        borderRadius: '20px',
+                        background: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
                         color: '#93c5fd',
-                        fontSize: '11px',
-                        fontWeight: 700,
+                        fontSize: '12px',
+                        fontWeight: 600,
                         cursor: 'pointer',
-                        display: 'flex',
+                        display: 'inline-flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '6px'
+                        gap: '6px',
+                        transition: 'all 0.15s ease'
                       }}
                     >
-                      ⚡ Audit {c.city} History ➔
+                      📍 {city}
                     </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Section 2: Critical Defaulter Watchlist (High-Priority Offline Vehicles) */}
-          <div className="card" style={{ padding: '22px', borderRadius: '14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
-              <div>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
-                  URGENT FIELD INTERVENTION REQUIRED
+                  ))}
+                  {fleetCities.length > 12 && (
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', alignSelf: 'center', marginLeft: '4px' }}>
+                      +{fleetCities.length - 12} more sites available in dropdown
+                    </span>
+                  )}
                 </div>
-                <h3 style={{ margin: '2px 0 0 0', fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
-                  🚨 Critical Defaulter Watchlist ({chronicVehiclesList.length} Vehicles Offline)
-                </h3>
-                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Vehicles currently flagged as inactive, offline, or requiring technician battery/wiring inspection.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleCopyExecutiveWhatsApp}
-                style={{
-                  background: 'rgba(239, 68, 68, 0.15)',
-                  border: '1px solid rgba(239, 68, 68, 0.4)',
-                  color: '#fca5a5',
-                  padding: '6px 12px',
-                  borderRadius: '8px',
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  cursor: 'pointer'
-                }}
-              >
-                📲 Copy Offline Alert to WhatsApp
-              </button>
-            </div>
-
-            {chronicVehiclesList.length === 0 ? (
-              <div style={{ padding: '24px', textAlign: 'center', color: '#34d399', fontSize: '13px', fontWeight: 600 }}>
-                ✓ Outstanding! 100% of fleet vehicles are operational and active.
-              </div>
-            ) : (
-              <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)' }}>
-                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead>
-                    <tr style={{ background: 'rgba(255,255,255,0.04)', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                      <th style={{ padding: '10px 14px' }}>#</th>
-                      <th style={{ padding: '10px 14px' }}>Vehicle Name</th>
-                      <th style={{ padding: '10px 14px' }}>Site / City</th>
-                      <th style={{ padding: '10px 14px' }}>IMEI Number</th>
-                      <th style={{ padding: '10px 14px' }}>SIM / Phone</th>
-                      <th style={{ padding: '10px 14px' }}>Status</th>
-                      <th style={{ padding: '10px 14px' }}>Last Seen</th>
-                      <th style={{ padding: '10px 14px' }}>Technician Remark</th>
-                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Executive Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {chronicVehiclesList.slice(0, 12).map((v, idx) => (
-                      <tr key={v.imei || idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                        <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{idx + 1}</td>
-                        <td style={{ padding: '10px 14px', fontWeight: 800, color: '#f87171' }}>
-                          🚗 {v.vehicle || 'Unknown'}
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
-                            {v.city || '—'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: '#cbd5e1' }}>
-                          {v.imei || '—'}
-                        </td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
-                          {v.sim || '—'}
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid #ef4444', color: '#fca5a5', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 700 }}>
-                            {v.roadcastStatus || 'Inactive'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 14px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                          {v.lastUpdate || '—'}
-                        </td>
-                        <td style={{ padding: '10px 14px', fontSize: '11px', color: '#fbbf24', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {v.remark || v.inactiveRunningRemark || 'No remark logged'}
-                        </td>
-                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                            <button
-                              type="button"
-                              onClick={() => handleAuditVehicle(v.vehicle, v.imei)}
-                              style={{
-                                background: 'rgba(59, 130, 246, 0.2)',
-                                border: '1px solid #3b82f6',
-                                color: '#93c5fd',
-                                padding: '3px 8px',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: 700,
-                                cursor: 'pointer'
-                              }}
-                              title="Audit historical daily CSV logs for this vehicle"
-                            >
-                              🔍 Audit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenDossierFromDevice(v)}
-                              style={{
-                                background: 'rgba(168, 85, 247, 0.2)',
-                                border: '1px solid #a855f7',
-                                color: '#d8b4fe',
-                                padding: '3px 8px',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: 700,
-                                cursor: 'pointer'
-                              }}
-                              title="Open 360° vehicle lifecycle dossier modal"
-                            >
-                              📋 360° Dossier
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* Section 3: Hardware Workshop & Return Tracking Cross-Link */}
-          {pendingReturnsList.length > 0 && (
-            <div className="card" style={{ padding: '22px', borderRadius: '14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
-              <div style={{ marginBottom: '14px' }}>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
-                  HARDWARE WORKSHOP CROSS-LINK
-                </div>
-                <h3 style={{ margin: '2px 0 0 0', fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
-                  🔧 Workshop Return &amp; Sensor Replacement Tracking
-                </h3>
-                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Devices submitted from municipal sites for workshop diagnosis, repair, or warranty exchange.
-                </p>
-              </div>
-
-              <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)' }}>
-                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead>
-                    <tr style={{ background: 'rgba(255,255,255,0.04)', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                      <th style={{ padding: '8px 12px' }}>#</th>
-                      <th style={{ padding: '8px 12px' }}>Vehicle Plate</th>
-                      <th style={{ padding: '8px 12px' }}>IMEI Number</th>
-                      <th style={{ padding: '8px 12px' }}>Site / City</th>
-                      <th style={{ padding: '8px 12px' }}>Reported Defect / Reason</th>
-                      <th style={{ padding: '8px 12px' }}>Status</th>
-                      <th style={{ padding: '8px 12px' }}>Date Submitted</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pendingReturnsList.map((r, rIdx) => (
-                      <tr key={r.id || rIdx} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                        <td style={{ padding: '8px 12px', color: 'var(--text-muted)' }}>{rIdx + 1}</td>
-                        <td style={{ padding: '8px 12px', fontWeight: 700, color: '#fff' }}>{r.vehicleNumber || '—'}</td>
-                        <td style={{ padding: '8px 12px', fontFamily: 'monospace', color: '#c7d2fe' }}>{r.imei || '—'}</td>
-                        <td style={{ padding: '8px 12px' }}>{r.city || '—'}</td>
-                        <td style={{ padding: '8px 12px', color: '#fbbf24' }}>{r.reason || r.defect || 'Hardware Repair'}</td>
-                        <td style={{ padding: '8px 12px' }}>
-                          <span style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#d8b4fe', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
-                            {r.status || 'Pending'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '8px 12px', fontSize: '11px', color: 'var(--text-muted)' }}>{r.date || r.createdAt || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             </div>
           )}
