@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#1e3448" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <title>VTS Fleet Tracker</title>
+    <!-- Anti-Blankout Protection: Suppresses unwanted automated reloads from Vite background disconnects -->
+    <script>
+      (function() {
+        try {
+          const OrigWebSocket = window.WebSocket;
+          if (OrigWebSocket) {
+            window.WebSocket = function(url, protocols) {
+              const ws = new OrigWebSocket(url, protocols);
+              if (typeof url === 'string' && (url.includes('vite') || url.includes('localhost') || url.includes('127.0.0.1'))) {
+                const origAdd = ws.addEventListener.bind(ws);
+                ws.addEventListener = function(type, listener, options) {
+                  if (type === 'close') {
+                    return origAdd(type, function(evt) {
+                      console.warn('[Anti-Blankout] Suppressed idle WebSocket close reload to preserve portal session.');
+                    }, options);
+                  }
+                  return origAdd(type, listener, options);
+                };
+
+                let _onclose = null;
+                try {
+                  Object.defineProperty(ws, 'onclose', {
+                    get() { return _onclose; },
+                    set(fn) {
+                      _onclose = function(evt) {
+                        console.warn('[Anti-Blankout] Suppressed onclose reload to preserve portal session.');
+                      };
+                    },
+                    configurable: true
+                  });
+                } catch (e) {
+                  // Property definition fallback
+                }
+              }
+              return ws;
+            };
+            window.WebSocket.prototype = OrigWebSocket.prototype;
+          }
+        } catch (e) {
+          console.warn('[Anti-Blankout] Init error:', e);
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
