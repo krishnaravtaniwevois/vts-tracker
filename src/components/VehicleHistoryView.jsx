@@ -879,471 +879,62 @@ export function VehicleHistoryView({
         </div>
       </div>
 
-      {/* 8:30 AM Morning Fleet Inspection & City-Wise WhatsApp Dispatch Banner */}
-      {showMorningBanner && morningDigest && (
-        <div
-          style={{
-            background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(239, 68, 68, 0.08) 100%)',
-            border: '1px solid rgba(245, 158, 11, 0.35)',
-            borderRadius: '12px',
-            padding: '16px 20px',
-            marginBottom: '20px',
-            position: 'relative'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '24px' }}>🌅</span>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#fef3c7', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  Morning Fleet Inspection &amp; Site Dispatch (8:30 AM Cutoff)
-                  {morningDigest.totalNoRemark > 0 && (
-                    <span style={{ fontSize: '11px', background: '#ef4444', color: '#fff', padding: '2px 8px', borderRadius: '10px', fontWeight: 700 }}>
-                      ⚠️ {morningDigest.totalNoRemark} Missing Remarks
-                    </span>
-                  )}
-                </h3>
-                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#fde68a' }}>
-                  Audited at <b>{morningDigest.inspectedAt}</b>. Inspect and report before the <b>10:00 AM municipal inspection penalty deadline</b>.
-                </p>
-              </div>
-            </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{ display: 'flex', gap: '12px', background: 'rgba(0,0,0,0.25)', padding: '6px 14px', borderRadius: '8px', fontSize: '12px' }}>
-                <span>Fleet: <b>{morningDigest.totalVehicles}</b></span>
-                <span style={{ color: '#f87171' }}>Inactive VTS: <b>{morningDigest.totalInactive}</b></span>
-                <span style={{ color: '#fbbf24' }}>Missing Remarks: <b>{morningDigest.totalNoRemark}</b></span>
-              </div>
+
+      {/* Super Clean & Intuitive Search Card */}
+      <div className="card" style={{ padding: '24px', marginBottom: '22px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '14px', boxShadow: '0 4px 24px rgba(0,0,0,0.12)' }}>
+        {/* Main Search Input & Primary Search Button */}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 360px', position: 'relative' }}>
+            <div style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#60a5fa', display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+              <Icon name="search" size={20} />
+            </div>
+            <input
+              type="text"
+              placeholder="Search by Vehicle No. (RJ14...), IMEI (8670...), SIM, or Site..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setShowSuggestions(true);
+                setErrorMsg(null);
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearch();
+              }}
+              style={{
+                width: '100%',
+                padding: '13px 40px 13px 46px',
+                borderRadius: '10px',
+                border: searchTerm ? '1px solid #3b82f6' : '1px solid var(--border-color)',
+                background: 'rgba(255, 255, 255, 0.05)',
+                color: 'inherit',
+                fontSize: '15px',
+                fontWeight: 500,
+                outline: 'none',
+                boxShadow: searchTerm ? '0 0 0 3px rgba(59, 130, 246, 0.15)' : 'none'
+              }}
+            />
+            {searchTerm && (
               <button
                 type="button"
-                onClick={() => setShowMorningBanner(false)}
-                style={{ background: 'none', border: 'none', color: '#fde68a', cursor: 'pointer', fontSize: '18px', padding: '0 4px' }}
-                title="Dismiss banner"
+                onClick={() => { setSearchTerm(''); setShowSuggestions(false); }}
+                style={{
+                  position: 'absolute',
+                  right: '12px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  fontSize: '18px',
+                  padding: '4px'
+                }}
+                title="Clear search"
               >
                 &times;
               </button>
-            </div>
-          </div>
-
-          {/* 1-Click WhatsApp Broadcast by City */}
-          <div>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#fde68a', textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.5px' }}>
-              📲 1-Click WhatsApp Alert Dispatch by Site (Pre-formatted Vehicle Lists):
-            </div>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {morningDigest.byCity && morningDigest.byCity.filter(c => c.inactive > 0).map((c) => {
-                const isCopied = copiedCity === c.city;
-                return (
-                  <div
-                    key={c.city}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      background: 'rgba(37, 211, 102, 0.15)',
-                      border: '1px solid rgba(37, 211, 102, 0.4)',
-                      borderRadius: '8px',
-                      overflow: 'hidden'
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleOpenCityWhatsApp(c)}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: '#25d366',
-                        padding: '6px 10px',
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                      title={`Send ${c.city} alert to site manager on WhatsApp`}
-                    >
-                      <span>💬 {c.city} Site</span>
-                      <span style={{ background: '#ef4444', color: '#fff', fontSize: '10px', padding: '1px 6px', borderRadius: '10px' }}>
-                        {c.inactive} Down {c.noRemark > 0 ? `(${c.noRemark} unremarked)` : ''}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleCopyCityWhatsApp(c)}
-                      style={{
-                        background: isCopied ? '#10b981' : 'rgba(0,0,0,0.2)',
-                        border: 'none',
-                        borderLeft: '1px solid rgba(37, 211, 102, 0.3)',
-                        color: isCopied ? '#fff' : '#25d366',
-                        padding: '6px 8px',
-                        fontSize: '11px',
-                        cursor: 'pointer',
-                        fontWeight: 600
-                      }}
-                      title="Copy pre-formatted text"
-                    >
-                      {isCopied ? '✓' : '📋 Copy'}
-                    </button>
-                  </div>
-                );
-              })}
-              {(!morningDigest.byCity || morningDigest.byCity.every(c => c.inactive === 0)) && (
-                <span style={{ fontSize: '12px', color: '#86efac' }}>
-                  🎉 All vehicles are active and streaming across all sites this morning!
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Search & Filter Card */}
-      <div className="card" style={{ padding: '20px', marginBottom: '20px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '12px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', alignItems: 'end' }}>
-          {/* Targeted Search Field Selector */}
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label style={{ fontWeight: 600, fontSize: '13px', marginBottom: '6px', display: 'block' }}>
-              Search In (Target Field)
-            </label>
-            <select
-              value={searchField}
-              onChange={(e) => setSearchField(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                borderRadius: '8px',
-                border: '1px solid var(--border-color)',
-                background: 'var(--card-bg, #1a202c)',
-                color: 'inherit',
-                fontSize: '13px',
-                fontWeight: 600
-              }}
-            >
-              <option value="all">🌐 All Fields (Universal)</option>
-              <option value="imei">📱 IMEI / SIM Only (Dynamic Vehicle &amp; City History)</option>
-              <option value="vehicle">🚗 Vehicle Number Only</option>
-              <option value="city">🏙️ City Only (Prevents false city matches)</option>
-              <option value="remark">📝 Remark Only</option>
-            </select>
-          </div>
-
-          {/* Dedicated City Filter Dropdown with Multi-Site Picker */}
-          <div className="form-group" style={{ marginBottom: 0, position: 'relative' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <label style={{ fontWeight: 600, fontSize: '13px', margin: 0, display: 'block' }}>
-                Filter by City (Site)
-              </label>
-              <button
-                type="button"
-                onClick={() => setShowMultiCityPicker(!showMultiCityPicker)}
-                style={{
-                  background: selectedCities.length > 0 ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-                  border: selectedCities.length > 0 ? '1px solid #3b82f6' : '1px solid var(--border-color)',
-                  color: selectedCities.length > 0 ? '#93c5fd' : 'var(--text-muted)',
-                  borderRadius: '6px',
-                  padding: '2px 8px',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
-                title="Select multiple project sites simultaneously"
-              >
-                {selectedCities.length > 0 ? `🏙️ ${selectedCities.length} Sites Selected` : '➕ Select Multiple Sites'}
-              </button>
-            </div>
-
-            <select
-              value={selectedCities.length > 0 ? '' : selectedCity}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSelectedCity(val);
-                setSelectedCities([]);
-                setErrorMsg(null);
-              }}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                borderRadius: '8px',
-                border: (selectedCity || selectedCities.length > 0) ? '1px solid #3b82f6' : '1px solid var(--border-color)',
-                background: (selectedCity || selectedCities.length > 0) ? 'rgba(59, 130, 246, 0.08)' : 'var(--card-bg, #1a202c)',
-                color: (selectedCity || selectedCities.length > 0) ? '#60a5fa' : 'inherit',
-                fontSize: '13px',
-                fontWeight: (selectedCity || selectedCities.length > 0) ? 700 : 400
-              }}
-            >
-              <option value="">
-                {selectedCities.length > 0 ? `Selected Sites (${selectedCities.join(', ')})` : 'All Cities (Entire Fleet)'}
-              </option>
-              {fleetCities.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-
-            {/* Multi-City Interactive Popover */}
-            {showMultiCityPicker && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '100%',
-                  left: 0,
-                  right: 0,
-                  zIndex: 60,
-                  background: '#1e293b',
-                  border: '1px solid #3b82f6',
-                  borderRadius: '10px',
-                  marginTop: '6px',
-                  padding: '14px',
-                  boxShadow: '0 12px 30px rgba(0,0,0,0.5)',
-                  minWidth: '260px'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 800, color: '#93c5fd' }}>
-                    Select Multiple Sites:
-                  </span>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedCities([...fleetCities])}
-                      style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
-                    >
-                      All
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedCities([])}
-                      style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
-                  {fleetCities.map((c) => {
-                    const isChecked = selectedCities.includes(c);
-                    return (
-                      <label
-                        key={c}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontSize: '12px',
-                          cursor: 'pointer',
-                          padding: '4px 8px',
-                          borderRadius: '6px',
-                          background: isChecked ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255,255,255,0.03)',
-                          color: isChecked ? '#fff' : '#cbd5e1'
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedCities([...selectedCities, c]);
-                              setSelectedCity('');
-                            } else {
-                              setSelectedCities(selectedCities.filter(x => x !== c));
-                            }
-                          }}
-                        />
-                        <span>{c}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowMultiCityPicker(false)}
-                    style={{
-                      background: '#3b82f6',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '6px',
-                      padding: '4px 12px',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Done ({selectedCities.length} Selected)
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Selected Cities Tag Pills */}
-            {selectedCities.length > 0 && (
-              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
-                {selectedCities.map((c) => (
-                  <span
-                    key={c}
-                    style={{
-                      background: 'rgba(59, 130, 246, 0.2)',
-                      border: '1px solid rgba(59, 130, 246, 0.4)',
-                      color: '#93c5fd',
-                      padding: '1px 8px',
-                      borderRadius: '10px',
-                      fontSize: '11px',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                  >
-                    {c}
-                    <span
-                      style={{ cursor: 'pointer', color: '#f87171', fontWeight: 800 }}
-                      onClick={() => setSelectedCities(selectedCities.filter(x => x !== c))}
-                    >
-                      &times;
-                    </span>
-                  </span>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setSelectedCities([])}
-                  style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
-                >
-                  Clear All
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Search Term Input with Autocomplete & Multi-Search Support */}
-          <div className="form-group" style={{ position: 'relative', marginBottom: 0, gridColumn: 'span 1' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <label style={{ fontWeight: 600, fontSize: '13px', margin: 0, display: 'block' }}>
-                {searchField === 'imei' ? '📱 Enter IMEI(s)' : 'Keyword / ID(s) / Vehicle(s)'}
-              </label>
-
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  onClick={() => { setShowBatchModal(true); setBatchTab('imei'); }}
-                  style={{
-                    background: 'rgba(99, 102, 241, 0.15)',
-                    border: '1px solid rgba(99, 102, 241, 0.4)',
-                    color: '#c7d2fe',
-                    borderRadius: '6px',
-                    padding: '2px 8px',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    cursor: 'pointer'
-                  }}
-                  title="Open bulk input to paste multiple IMEIs or Vehicle numbers from Excel"
-                >
-                  ⚡ Batch / Multi-Search
-                </button>
-
-                <label style={{ cursor: 'pointer', fontWeight: 400, color: 'var(--text-muted)', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                  <input
-                    type="checkbox"
-                    checked={exactMatch}
-                    onChange={(e) => setExactMatch(e.target.checked)}
-                  />
-                  Exact phrase
-                </label>
-              </div>
-            </div>
-
-            <div style={{ position: 'relative' }}>
-              <input
-                type="text"
-                placeholder={
-                  searchField === 'imei'
-                    ? 'e.g. 867440066114794, 867440066114795 (comma/space separated)...'
-                    : 'e.g. "867440066114794, 867440066114795", "RJ14 GP 5469, EV-1010", "Jaipur, Jodhpur"'
-                }
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                  setShowSuggestions(true);
-                  setErrorMsg(null);
-                }}
-                onFocus={() => setShowSuggestions(true)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSearch();
-                }}
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  borderRadius: '8px',
-                  border: (searchField === 'imei' || parsedSearchTerms.length > 1) ? '1px solid #6366f1' : '1px solid var(--border-color)',
-                  background: (searchField === 'imei' || parsedSearchTerms.length > 1) ? 'rgba(99, 102, 241, 0.08)' : 'rgba(255, 255, 255, 0.04)',
-                  color: 'inherit',
-                  fontSize: '13px',
-                  fontFamily: searchField === 'imei' ? 'monospace' : 'inherit'
-                }}
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  onClick={() => { setSearchTerm(''); setShowSuggestions(false); }}
-                  style={{
-                    position: 'absolute',
-                    right: '10px',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-muted)',
-                    cursor: 'pointer',
-                    fontSize: '16px'
-                  }}
-                >
-                  &times;
-                </button>
-              )}
-            </div>
-
-            {/* Detected Multi-Search Term Chips */}
-            {parsedSearchTerms.length > 1 && (
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '6px' }}>
-                <span style={{ fontSize: '11px', color: '#a5b4fc', fontWeight: 700 }}>
-                  ⚡ Multi-Search ({parsedSearchTerms.length} items - OR match):
-                </span>
-                {parsedSearchTerms.map((t, idx) => (
-                  <span
-                    key={idx}
-                    style={{
-                      background: 'rgba(99, 102, 241, 0.2)',
-                      border: '1px solid rgba(99, 102, 241, 0.4)',
-                      color: '#c7d2fe',
-                      padding: '1px 8px',
-                      borderRadius: '12px',
-                      fontSize: '11px',
-                      fontFamily: /^\d+$/.test(t) ? 'monospace' : 'inherit',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                  >
-                    {t}
-                    <span
-                      style={{ cursor: 'pointer', color: '#f87171', fontWeight: 800 }}
-                      onClick={() => {
-                        const remaining = parsedSearchTerms.filter((_, i) => i !== idx);
-                        setSearchTerm(remaining.join(', '));
-                      }}
-                    >
-                      &times;
-                    </span>
-                  </span>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setSearchTerm('')}
-                  style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}
-                >
-                  Clear All
-                </button>
-              </div>
             )}
 
             {/* Smart Suggestions Dropdown */}
@@ -1356,10 +947,10 @@ export function VehicleHistoryView({
                   right: 0,
                   zIndex: 50,
                   background: 'var(--card-bg, #1a202c)',
-                  border: '1px solid var(--border-color, #2d3748)',
-                  borderRadius: '8px',
-                  marginTop: '4px',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                  border: '1px solid #3b82f6',
+                  borderRadius: '10px',
+                  marginTop: '6px',
+                  boxShadow: '0 12px 30px rgba(0,0,0,0.4)',
                   maxHeight: '260px',
                   overflowY: 'auto'
                 }}
@@ -1368,212 +959,293 @@ export function VehicleHistoryView({
                   <div
                     key={idx}
                     onClick={() => {
-                      setSearchTerm(s.value);
-                      if (s.targetField) setSearchField(s.targetField);
+                      if (s.type === 'City') {
+                        setSelectedCity(s.value);
+                        setSelectedCities([]);
+                        setSearchField('city');
+                        setSearchTerm('');
+                        handleSearch('', s.value, 'city');
+                      } else if (s.type === 'IMEI') {
+                        setSearchTerm(s.value);
+                        setSearchField('imei');
+                        handleSearch(s.value, '', 'imei');
+                      } else {
+                        setSearchTerm(s.value);
+                        setSearchField('vehicle');
+                        handleSearch(s.value, '', 'vehicle');
+                      }
                       setShowSuggestions(false);
-                      handleSearch(s.value, null, s.targetField || searchField);
                     }}
                     style={{
-                      padding: '9px 12px',
+                      padding: '10px 14px',
                       cursor: 'pointer',
                       borderBottom: '1px solid rgba(255,255,255,0.05)',
-                      fontSize: '13px',
                       display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center'
+                      alignItems: 'center',
+                      gap: '10px'
                     }}
                     onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.15)'}
                     onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
-                    <div>
-                      <span style={{
-                        display: 'inline-block',
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        textTransform: 'uppercase',
-                        padding: '1px 6px',
-                        borderRadius: '4px',
-                        background: s.type === 'IMEI' ? 'rgba(99, 102, 241, 0.25)' : s.type === 'City' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(59, 130, 246, 0.2)',
-                        color: s.type === 'IMEI' ? '#a5b4fc' : s.type === 'City' ? '#10b981' : '#60a5fa',
-                        marginRight: '8px'
-                      }}>
-                        {s.type}
-                      </span>
-                      <strong style={{ color: '#fff', fontFamily: s.type === 'IMEI' ? 'monospace' : 'inherit' }}>{s.label}</strong>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>
-                        {s.sub}
-                      </div>
-                    </div>
+                    <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '4px', background: s.type === 'IMEI' ? 'rgba(99, 102, 241, 0.3)' : 'rgba(59, 130, 246, 0.3)', color: '#93c5fd', fontWeight: 700 }}>
+                      {s.type}
+                    </span>
+                    <strong style={{ color: '#fff' }}>{s.label}</strong>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '12px', marginLeft: 'auto' }}>
+                      {s.sub}
+                    </span>
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Start Date */}
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label style={{ fontWeight: 600, fontSize: '13px', marginBottom: '6px', display: 'block' }}>
-              Start Date
-            </label>
+          {/* Primary Search Button */}
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => handleSearch()}
+            disabled={loadingHistory}
+            style={{
+              padding: '13px 28px',
+              fontSize: '15px',
+              fontWeight: 700,
+              borderRadius: '10px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+              background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.35)',
+              cursor: 'pointer'
+            }}
+          >
+            <Icon name="search" size={18} />
+            {loadingHistory ? 'Searching Reports...' : 'Search History'}
+          </button>
+        </div>
+
+        {/* Filters Row: City / Site + Period Presets + Date Range */}
+        <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          {/* Site / City Filter Dropdown */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}>Site / City:</span>
+            <select
+              value={selectedCities.length > 0 ? '' : selectedCity}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedCity(val);
+                setSelectedCities([]);
+                setErrorMsg(null);
+                if (val) handleSearch(searchTerm, val, searchField);
+              }}
+              style={{
+                padding: '8px 14px',
+                borderRadius: '8px',
+                border: (selectedCity || selectedCities.length > 0) ? '1px solid #3b82f6' : '1px solid var(--border-color)',
+                background: (selectedCity || selectedCities.length > 0) ? 'rgba(59, 130, 246, 0.12)' : 'var(--card-bg, #1a202c)',
+                color: (selectedCity || selectedCities.length > 0) ? '#60a5fa' : 'inherit',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              <option value="">
+                {selectedCities.length > 0 ? `Selected Sites (${selectedCities.join(', ')})` : '🏙️ All Sites (Entire Fleet)'}
+              </option>
+              {fleetCities.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={() => setShowMultiCityPicker(!showMultiCityPicker)}
+              style={{
+                background: selectedCities.length > 0 ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+                border: selectedCities.length > 0 ? '1px solid #3b82f6' : '1px solid var(--border-color)',
+                color: selectedCities.length > 0 ? '#93c5fd' : 'var(--text-muted)',
+                borderRadius: '8px',
+                padding: '8px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+              title="Select multiple project sites simultaneously"
+            >
+              {selectedCities.length > 0 ? `✓ ${selectedCities.length} Sites` : '➕ Multi-Site'}
+            </button>
+
+            {/* Multi-City Popover */}
+            {showMultiCityPicker && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  zIndex: 60,
+                  background: '#1e293b',
+                  border: '1px solid #3b82f6',
+                  borderRadius: '10px',
+                  marginTop: '6px',
+                  padding: '14px',
+                  boxShadow: '0 12px 30px rgba(0,0,0,0.5)',
+                  minWidth: '280px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 800, color: '#93c5fd' }}>Select Sites:</span>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button type="button" onClick={() => setSelectedCities([...fleetCities])} style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}>All</button>
+                    <button type="button" onClick={() => setSelectedCities([])} style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}>Clear</button>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+                  {fleetCities.map((c) => {
+                    const isChecked = selectedCities.includes(c);
+                    return (
+                      <label key={c} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', padding: '4px 8px', borderRadius: '6px', background: isChecked ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255,255,255,0.03)', color: isChecked ? '#fff' : '#cbd5e1' }}>
+                        <input type="checkbox" checked={isChecked} onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedCities([...selectedCities, c]);
+                            setSelectedCity('');
+                          } else {
+                            setSelectedCities(selectedCities.filter(x => x !== c));
+                          }
+                        }} />
+                        <span>{c}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button type="button" onClick={() => { setShowMultiCityPicker(false); handleSearch(searchTerm, '', searchField, selectedCities); }} className="primary-button" style={{ padding: '4px 12px', fontSize: '11px' }}>
+                    Done ({selectedCities.length})
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Time Period Presets */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}>Period:</span>
+            <div style={{ display: 'flex', gap: '4px' }}>
+              {[
+                { label: '3 Days', days: 3 },
+                { label: '7 Days', days: 7 },
+                { label: '14 Days', days: 14 },
+                { label: '30 Days', days: 30 }
+              ].map((p) => {
+                const isActive = (new Date(historyEnd) - new Date(historyStart)) / (1000 * 60 * 60 * 24) === p.days;
+                return (
+                  <button
+                    key={p.days}
+                    type="button"
+                    onClick={() => setPreset(p.days)}
+                    style={{
+                      background: isActive ? '#3b82f6' : 'rgba(255, 255, 255, 0.05)',
+                      border: isActive ? '1px solid #60a5fa' : '1px solid var(--border-color)',
+                      color: isActive ? '#fff' : 'var(--text-muted)',
+                      borderRadius: '6px',
+                      padding: '6px 10px',
+                      fontSize: '12px',
+                      fontWeight: isActive ? 700 : 500,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Start Date & End Date */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto' }}>
             <input
               type="date"
               value={historyStart}
               onChange={(e) => setHistoryStart(e.target.value)}
               style={{
-                width: '100%',
-                padding: '9px 12px',
-                borderRadius: '8px',
+                padding: '6px 10px',
+                borderRadius: '6px',
                 border: '1px solid var(--border-color)',
                 background: 'rgba(255, 255, 255, 0.04)',
                 color: 'inherit',
-                fontSize: '13px'
+                fontSize: '12px'
               }}
+              title="Start Date"
             />
-          </div>
-
-          {/* End Date */}
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label style={{ fontWeight: 600, fontSize: '13px', marginBottom: '6px', display: 'block' }}>
-              End Date
-            </label>
+            <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>to</span>
             <input
               type="date"
               value={historyEnd}
               onChange={(e) => setHistoryEnd(e.target.value)}
               style={{
-                width: '100%',
-                padding: '9px 12px',
-                borderRadius: '8px',
+                padding: '6px 10px',
+                borderRadius: '6px',
                 border: '1px solid var(--border-color)',
                 background: 'rgba(255, 255, 255, 0.04)',
                 color: 'inherit',
-                fontSize: '13px'
+                fontSize: '12px'
               }}
+              title="End Date"
             />
           </div>
 
-          {/* Action Search Button */}
-          <div>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => handleSearch()}
-              disabled={loadingHistory}
-              style={{
-                width: '100%',
-                padding: '11px 18px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                fontWeight: 700
-              }}
-            >
-              <Icon name="search" size={16} />
-              {loadingHistory ? 'Auditing Drive Reports...' : 'Audit Fleet History'}
-            </button>
-          </div>
+          {/* Bulk Paste Modal Button */}
+          <button
+            type="button"
+            onClick={() => { setShowBatchModal(true); setBatchTab('imei'); }}
+            style={{
+              background: 'rgba(99, 102, 241, 0.15)',
+              border: '1px solid rgba(99, 102, 241, 0.35)',
+              color: '#c7d2fe',
+              borderRadius: '8px',
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+            title="Paste multiple IMEIs or Vehicle numbers from Excel"
+          >
+            📋 Bulk Paste
+          </button>
         </div>
 
-        {/* Quick Filter Chips & Presets */}
-        <div style={{ display: 'flex', gap: '16px', marginTop: '16px', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '14px' }}>
-          {/* Date Presets */}
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>
-              Period:
-            </span>
-            {[
-              { label: '⚡ Last 3 Days (Fast)', days: 3 },
-              { label: 'Last 7 Days (Default)', days: 7 },
-              { label: 'Last 14 Days', days: 14 },
-              { label: 'Last 30 Days', days: 30 }
-            ].map((p) => (
-              <button
-                key={p.days}
-                type="button"
-                onClick={() => setPreset(p.days)}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '6px',
-                  padding: '3px 8px',
-                  fontSize: '11px',
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer'
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.color = '#fff'}
-                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-muted)'}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Quick City Chips */}
-          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>
-              Quick Sites:
-            </span>
-            {fleetCities.slice(0, 6).map((city) => (
-              <button
-                key={city}
-                type="button"
-                onClick={() => {
-                  setSelectedCity(city);
-                  setSearchField('city');
-                  setSearchTerm('');
-                  handleSearch('', city, 'city');
-                }}
-                style={{
-                  background: selectedCity === city ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.1)',
-                  border: selectedCity === city ? '1px solid #3b82f6' : '1px solid rgba(59, 130, 246, 0.25)',
-                  borderRadius: '12px',
-                  padding: '3px 9px',
-                  fontSize: '11px',
-                  color: selectedCity === city ? '#fff' : '#93c5fd',
-                  cursor: 'pointer',
-                  fontWeight: selectedCity === city ? 700 : 400
-                }}
-              >
-                🏙️ {city}
-              </button>
-            ))}
-          </div>
-
-          {/* Quick IMEI Chips for Instant Testing */}
-          {sampleImeis.length > 0 && (
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', width: '100%', marginTop: '6px' }}>
-              <span style={{ fontSize: '11px', color: '#a5b4fc', textTransform: 'uppercase', fontWeight: 700 }}>
-                📱 Quick IMEIs:
-              </span>
-              {sampleImeis.map((item) => (
-                <button
-                  key={item.imei}
-                  type="button"
-                  onClick={() => {
-                    setSearchTerm(item.imei);
-                    setSearchField('imei');
-                    setSelectedCity('');
-                    handleSearch(item.imei, '', 'imei');
-                  }}
-                  style={{
-                    background: searchTerm === item.imei ? 'rgba(99, 102, 241, 0.35)' : 'rgba(99, 102, 241, 0.1)',
-                    border: searchTerm === item.imei ? '1px solid #6366f1' : '1px solid rgba(99, 102, 241, 0.3)',
-                    borderRadius: '12px',
-                    padding: '3px 10px',
-                    fontSize: '11px',
-                    fontFamily: 'monospace',
-                    color: searchTerm === item.imei ? '#fff' : '#c7d2fe',
-                    cursor: 'pointer',
-                    fontWeight: searchTerm === item.imei ? 700 : 500
-                  }}
-                  title={`Click to audit dynamic journey of IMEI ${item.imei} across vehicles & sites`}
-                >
-                  📱 {item.imei} <span style={{ opacity: 0.7, fontSize: '10px', fontFamily: 'inherit' }}>({item.vehicle || item.city})</span>
-                </button>
-              ))}
-            </div>
-          )}
+        {/* Quick Site Chips */}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '12px' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Quick Sites:</span>
+          {fleetCities.slice(0, 6).map((city) => (
+            <button
+              key={city}
+              type="button"
+              onClick={() => {
+                setSelectedCity(city);
+                setSelectedCities([]);
+                setSearchField('city');
+                setSearchTerm('');
+                handleSearch('', city, 'city');
+              }}
+              style={{
+                background: selectedCity === city ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.08)',
+                border: selectedCity === city ? '1px solid #3b82f6' : '1px solid rgba(59, 130, 246, 0.2)',
+                borderRadius: '14px',
+                padding: '3px 10px',
+                fontSize: '12px',
+                color: selectedCity === city ? '#fff' : '#93c5fd',
+                cursor: 'pointer',
+                fontWeight: selectedCity === city ? 700 : 500
+              }}
+            >
+              🏙️ {city}
+            </button>
+          ))}
         </div>
       </div>
 
