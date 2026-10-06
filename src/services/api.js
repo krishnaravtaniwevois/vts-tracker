@@ -1,5 +1,5 @@
 import { initialDevices, initialRequests, initialReturns } from '../mockData';
-import { calculateDaysRemaining, formatDisplayDate, getRechargeStatus } from '../utils/dateUtils';
+import { calculateDaysRemaining, formatDisplayDate, getRechargeStatus, cleanFinalStatus } from '../utils/dateUtils';
 import { safeSetItem, safeGetItem, safeGetJson, safeRemoveItem } from '../utils/storage';
 import {
   fetchAllFirebaseUsers,
@@ -152,7 +152,8 @@ export async function fetchAllFleetData() {
         rechargeStatus: computedRechargeStatus,
         status: computedRechargeStatus,
         statusOverride: override,
-        displayStatus: override || d.finalStatus || (String(d.roadcastStatus || '').toLowerCase() === 'inactive' ? 'Inactive' : '—'),
+        finalStatus: cleanFinalStatus(d.finalStatus) || d.finalStatus || '',
+        displayStatus: override || cleanFinalStatus(d.finalStatus) || (String(d.roadcastStatus || '').toLowerCase() === 'inactive' ? 'Inactive' : '—'),
         renewalDecision: d.renewalDecision || 'Pending',
         renewalRemark: d.renewalRemark || '',
         inactiveRunningRemark: d.inactiveRunningRemark || ''
@@ -211,6 +212,8 @@ export async function fetchAllFleetData() {
         const computedRechargeStatus = getRechargeStatus(remainingDays);
         const override = d.statusOverride || d.override || '';
 
+        const cleanedFinalStatus = cleanFinalStatus(d.finalStatus);
+
         return {
           ...d,
           licenseEnd: rawLicenseEnd ? formatDisplayDate(rawLicenseEnd) : '',
@@ -218,7 +221,8 @@ export async function fetchAllFleetData() {
           rechargeStatus: computedRechargeStatus,
           status: computedRechargeStatus,
           statusOverride: override,
-          displayStatus: override || d.finalStatus || (String(d.roadcastStatus || '').toLowerCase() === 'inactive' ? 'Inactive' : '—'),
+          finalStatus: cleanedFinalStatus || d.finalStatus || '',
+          displayStatus: override || cleanedFinalStatus || (String(d.roadcastStatus || '').toLowerCase() === 'inactive' ? 'Inactive' : '—'),
           renewalDecision: d.renewalDecision || d.decision || 'Pending',
           renewalRemark: d.renewalRemark || d.remark || '',
           inactiveRunningRemark: d.inactiveRunningRemark || ''
@@ -1537,7 +1541,7 @@ export async function updateStatusOverride(uniqueid, override) {
         return {
           ...d,
           statusOverride: override,
-          displayStatus: override || d.finalStatus || (String(d.roadcastStatus || '').toLowerCase() === 'inactive' ? 'Inactive' : '—')
+          displayStatus: override || cleanFinalStatus(d.finalStatus) || (String(d.roadcastStatus || '').toLowerCase() === 'inactive' ? 'Inactive' : '—')
         };
       }
       return d;

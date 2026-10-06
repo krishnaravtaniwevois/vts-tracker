@@ -28,9 +28,10 @@ export function parseFlexibleDate(val) {
   if (!val) return null;
   if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
 
-  // Handle Excel Serial Number (e.g. 46263)
-  if (typeof val === 'number' && val > 20000 && val < 70000) {
-    const utcDays = Math.floor(val - 25569);
+  // Handle Excel Serial Number (e.g. 46263 or "46263")
+  const numVal = typeof val === 'number' ? val : (typeof val === 'string' && /^\d{5}$/.test(val.trim()) ? Number(val.trim()) : null);
+  if (numVal && numVal > 20000 && numVal < 70000) {
+    const utcDays = Math.floor(numVal - 25569);
     const date = new Date(utcDays * 86400 * 1000);
     return isNaN(date.getTime()) ? null : date;
   }
@@ -118,5 +119,40 @@ export function getRechargeStatus(remainingDays) {
   if (remainingDays <= 15) return 'Recharge Soon';
   return 'Safe';
 }
+
+/**
+ * Clean and normalize Column H ('Final Status')
+ * Handles Excel serial numbers (e.g. 46301 -> Active)
+ */
+export function cleanFinalStatus(val) {
+  if (val === undefined || val === null) return '';
+  const s = String(val).trim();
+  if (!s || s === '—' || s === '-') return '';
+
+  const lower = s.toLowerCase();
+  if (lower === 'active' || lower === 'expired' || lower === 'running' || lower === 'inactive' || lower === 'damaged' || lower === 'at site') {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  // Handle Excel serial date (e.g. 46301 = 06-Oct-2026)
+  if (/^\d{5}$/.test(s) || (typeof val === 'number' && val > 20000 && val < 70000)) {
+    const d = parseFlexibleDate(val);
+    if (d) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const targetDate = new Date(d);
+      targetDate.setHours(0, 0, 0, 0);
+      const diffDays = Math.round((today.getTime() - targetDate.getTime()) / (1000 * 60 * 60 * 24));
+      // If it's today (e.g. 46301 on 06 Oct 2026) or within the last 2 days, vehicle is Active
+      if (diffDays <= 2 && diffDays >= -2) {
+        return 'Active';
+      }
+      return `Active (${formatDisplayDate(d)})`;
+    }
+  }
+
+  return s;
+}
+
 
 
