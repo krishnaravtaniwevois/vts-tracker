@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Icon } from './Icons';
 import { fetchVehicleHistory, fetchMorningFleetDigest } from '../services/api';
+import { exportToExcelFile, exportToCsvFile } from '../services/exportUtils';
 
 export function VehicleHistoryView({
   devices = [],
@@ -113,6 +114,68 @@ export function VehicleHistoryView({
     });
     return Array.from(set).sort();
   }, [devices]);
+
+  // Executive Fleet Health Statistics
+  const fleetStats = useMemo(() => {
+    const total = devices.length;
+    let active = 0;
+    let inactive = 0;
+    let expiringSoon = 0;
+    const cityMap = {};
+
+    devices.forEach((d) => {
+      const roadcast = String(d.roadcastStatus || '').toLowerCase();
+      const finalSt = String(d.finalStatus || '').toLowerCase();
+      const isAct = roadcast === 'active' || finalSt === 'running' || finalSt === 'active';
+      if (isAct) active++;
+      else inactive++;
+
+      if (d.remainingDays !== undefined && d.remainingDays !== null && d.remainingDays <= 15 && d.remainingDays >= 0) {
+        expiringSoon++;
+      }
+
+      const c = (d.city || 'Other').trim();
+      if (!cityMap[c]) {
+        cityMap[c] = { city: c, total: 0, active: 0, inactive: 0 };
+      }
+      cityMap[c].total++;
+      if (isAct) cityMap[c].active++;
+      else cityMap[c].inactive++;
+    });
+
+    const cityList = Object.values(cityMap).map((cm) => ({
+      ...cm,
+      uptimePct: cm.total > 0 ? Math.round((cm.active / cm.total) * 100) : 0,
+      downtimePct: cm.total > 0 ? Math.round((cm.inactive / cm.total) * 100) : 0
+    })).sort((a, b) => b.total - a.total);
+
+    const uptimePct = total > 0 ? Math.round((active / total) * 100) : 0;
+    const downtimePct = total > 0 ? (100 - uptimePct) : 0;
+
+    return {
+      total,
+      active,
+      inactive,
+      expiringSoon,
+      uptimePct,
+      downtimePct,
+      cities: cityList
+    };
+  }, [devices]);
+
+  // Critical Inactive Defaulters List
+  const chronicVehiclesList = useMemo(() => {
+    return (devices || []).filter((d) => {
+      const roadcast = String(d.roadcastStatus || '').toLowerCase();
+      const finalSt = String(d.finalStatus || '').toLowerCase();
+      return roadcast === 'inactive' || finalSt === 'inactive' || finalSt === 'damaged';
+    });
+  }, [devices]);
+
+  // Pending Workshop Return / Repair Requests
+  const pendingReturnsList = useMemo(() => {
+    return (returnRequests || []).slice(0, 10);
+  }, [returnRequests]);
 
   // Parse multi-search tokens from searchTerm if user typed comma/newline/space separated items
   const parsedSearchTerms = useMemo(() => {
@@ -862,20 +925,401 @@ export function VehicleHistoryView({
     document.body.removeChild(link);
   };
 
+  const handlePrintReport = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Please allow popups to print the executive report.');
+      return;
+    }
+
+    const title = historyData
+      ? `Fleet Audit Report - ${searchTerm || selectedCity || 'All Fleet'} (${historyStart} to ${historyEnd})`
+      : `Executive Fleet Status Report - ${new Date().toLocaleDateString('en-GB')}`;
+
+    const items = filteredResults && filteredResults.length > 0
+      ? filteredResults
+      : devices;
+
+    const rowsHtml = items.slice(0, 300).map((r, i) => {
+      const isInactive = (r.roadcastStatus || r.status || '').toLowerCase() === 'inactive';
+      return `
+        <tr style="${isInactive ? 'background: #fff1f2;' : ''}">
+          <td style="padding: 6px 10px; border: 1px solid #cbd5e1; text-align: center;">${i + 1}</td>
+          <td style="padding: 6px 10px; border: 1px solid #cbd5e1; font-weight: bold;">${r.vehicleName || r.vehicle || '—'}</td>
+          <td style="padding: 6px 10px; border: 1px solid #cbd5e1; font-family: monospace;">${r.imei || '—'}</td>
+          <td style="padding: 6px 10px; border: 1px solid #cbd5e1;">${r.city || '—'}</td>
+          <td style="padding: 6px 10px; border: 1px solid #cbd5e1; font-family: monospace;">${r.phone || r.sim || '—'}</td>
+          <td style="padding: 6px 10px; border: 1px solid #cbd5e1; font-weight: bold; color: ${isInactive ? '#dc2626' : '#16a34a'};">${r.roadcastStatus || r.status || 'Active'}</td>
+          <td style="padding: 6px 10px; border: 1px solid #cbd5e1;">${r.lastUpdate || r.date || '—'}</td>
+          <td style="padding: 6px 10px; border: 1px solid #cbd5e1;">${r.remark || r.inactiveRunningRemark || '—'}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>${title}</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; color: #1e293b; }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #2563eb; padding-bottom: 12px; margin-bottom: 16px; }
+          .brand { display: flex; align-items: center; gap: 12px; }
+          .brand img { height: 42px; }
+          .brand h1 { margin: 0; font-size: 20px; color: #1e293b; font-weight: 800; }
+          .brand p { margin: 2px 0 0 0; font-size: 11px; color: #64748b; }
+          .meta { text-align: right; font-size: 11px; color: #475569; }
+          .kpis { display: flex; gap: 12px; margin-bottom: 16px; }
+          .kpi { flex: 1; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; text-align: center; }
+          .kpi-title { font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: bold; }
+          .kpi-val { font-size: 20px; font-weight: 800; margin-top: 2px; }
+          table { width: 100%; border-collapse: collapse; font-size: 11px; }
+          th { background: #f1f5f9; padding: 8px 10px; border: 1px solid #cbd5e1; text-align: left; font-size: 10px; text-transform: uppercase; }
+          .footer { margin-top: 24px; border-top: 1px solid #cbd5e1; padding-top: 10px; display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; }
+          @media print {
+            body { padding: 0; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="brand">
+            <img src="/wevois-logo.png" alt="WeVOIS" onerror="this.style.display='none'" />
+            <div>
+              <h1>WeVOIS Labs &bull; Vehicle Fleet Audit Report</h1>
+              <p>Executive Fleet Health, Downtime & Operational Compliance</p>
+            </div>
+          </div>
+          <div class="meta">
+            <div><strong>Date:</strong> ${new Date().toLocaleString('en-GB')}</div>
+            <div><strong>Scope:</strong> ${searchTerm || selectedCity || 'Entire Fleet'}</div>
+            <div><strong>Audited Records:</strong> ${items.length}</div>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi">
+            <div class="kpi-title">Total Monitored Fleet</div>
+            <div class="kpi-val" style="color: #2563eb;">${fleetStats.total}</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-title">Active Uptime</div>
+            <div class="kpi-val" style="color: #16a34a;">${fleetStats.active} (${fleetStats.uptimePct}%)</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-title">Inactive Downtime</div>
+            <div class="kpi-val" style="color: #dc2626;">${fleetStats.inactive} (${fleetStats.downtimePct}%)</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-title">Active Sites</div>
+            <div class="kpi-val" style="color: #475569;">${fleetCities.length} Sites</div>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Vehicle Name</th>
+              <th>IMEI</th>
+              <th>Site / City</th>
+              <th>Phone</th>
+              <th>Roadcast Status</th>
+              <th>Last Seen</th>
+              <th>Remark / Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+
+        <div class="footer">
+          <div>WeVOIS VTS Fleet Tracking Hub &bull; Confidential &bull; Executive Operations Digest</div>
+          <div>Operations Officer Sign: _________________________</div>
+        </div>
+
+        <script>
+          window.onload = function() { window.print(); }
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  const handleCopyExecutiveWhatsApp = () => {
+    const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    let text = `📊 *WEVOIS FLEET EXECUTIVE HEALTH REPORT* 📊\n`;
+    text += `📅 *Date:* ${dateStr}\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `🚗 *Total Monitored Fleet:* ${fleetStats.total} Vehicles\n`;
+    text += `🟢 *Active / Operational:* ${fleetStats.active} (${fleetStats.uptimePct}%)\n`;
+    text += `🔴 *Inactive / Downtime:* ${fleetStats.inactive} (${fleetStats.downtimePct}%)\n`;
+    text += `⚠️ *Chronic Defaulters:* ${chronicVehiclesList.length} Vehicles\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `🏙️ *SITE PERFORMANCE SCORECARD:*\n`;
+    fleetStats.cities.slice(0, 8).forEach((c) => {
+      text += `• *${c.city}:* ${c.active}/${c.total} Active (${c.uptimePct}% Uptime)\n`;
+    });
+    if (chronicVehiclesList.length > 0) {
+      text += `\n🚨 *CRITICAL ATTENTION REQUIRED (TOP INACTIVE):*\n`;
+      chronicVehiclesList.slice(0, 6).forEach((v, idx) => {
+        text += `${idx + 1}. *${v.vehicle}* (${v.city}) - Remark: _${v.remark || v.inactiveRunningRemark || 'No Remark'}_\n`;
+      });
+    }
+    text += `\n👉 _Generated via WeVOIS VTS Intelligence Hub_`;
+
+    navigator.clipboard.writeText(text).then(() => {
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2500);
+    });
+  };
+
+  const handleOpenDossierFromDevice = (d) => {
+    setDossierVehicle({
+      vehicle: d.vehicle || 'Unknown',
+      vehicleName: d.vehicle || 'Unknown',
+      imei: d.imei || '',
+      city: d.city || 'Unassigned',
+      phone: d.sim || d.phone || '',
+      sim: d.sim || d.phone || '',
+      roadcastStatus: d.roadcastStatus || 'Active',
+      finalStatus: d.finalStatus || 'RUNNING',
+      vtsType: d.vtsType || 'VTS Package 4G',
+      remark: d.remark || '',
+      licenseEnd: d.licenseEnd || '',
+      remainingDays: d.remainingDays,
+      rechargeStatus: d.rechargeStatus,
+      rows: []
+    });
+    setDossierTab('timeline');
+  };
+
+  const handleAuditVehicle = (vehName, imei) => {
+    const term = (vehName || imei || '').trim();
+    if (!term) return;
+    setSearchTerm(term);
+    setSearchField(vehName ? 'vehicle' : 'imei');
+    setSelectedCity('');
+    setSelectedCities([]);
+    handleSearch(term, '', vehName ? 'vehicle' : 'imei');
+  };
+
+  const handleAuditCity = (cityName) => {
+    if (!cityName) return;
+    setSelectedCity(cityName);
+    setSelectedCities([]);
+    setSearchField('city');
+    setSearchTerm('');
+    handleSearch('', cityName, 'city');
+  };
+
+  const handleAuditAllFleet = () => {
+    setSelectedCity('');
+    setSelectedCities([...fleetCities]);
+    setSearchField('all');
+    setSearchTerm('');
+    handleSearch('', '', 'all', [...fleetCities]);
+  };
+
+  const handleExportFleetExcel = () => {
+    const items = filteredResults && filteredResults.length > 0 ? filteredResults : devices;
+    const formatted = items.map((d, idx) => ({
+      'Sr.': idx + 1,
+      'Vehicle Name': d.vehicleName || d.vehicle || '',
+      'IMEI / Unique ID': d.imei || '',
+      'SIM / Phone': d.phone || d.sim || '',
+      'City / Site': d.city || '',
+      'Roadcast Status': d.roadcastStatus || d.status || '',
+      'Final Status': d.finalStatus || '',
+      'Last Update': d.lastUpdate || d.date || '',
+      'VTS Type': d.vtsType || 'VTS Package 4G',
+      'Remark': d.remark || d.inactiveRunningRemark || ''
+    }));
+    exportToExcelFile(formatted, `WeVOIS_Fleet_Audit_${(selectedCity || 'AllSites')}`);
+  };
+
   return (
     <div className="view-container">
-      {/* Header Banner */}
-      <div className="page-heading" style={{ marginBottom: '20px' }}>
+      {/* Header Banner & Executive Action Bar */}
+      <div className="page-heading" style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
         <div>
           <div className="modal-eyebrow" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Icon name="history" size={14} /> FLEET INTELLIGENCE &amp; 360° VEHICLE AUDIT
           </div>
           <h2 style={{ fontSize: '24px', fontWeight: 800, margin: '4px 0 6px 0', color: 'var(--text-main)' }}>
-            Vehicle History &amp; Downtime Audit
+            Vehicle History &amp; Fleet Downtime Intelligence
           </h2>
           <p className="subheading" style={{ margin: 0 }}>
-            Universal audit of daily Google Drive CSV reports with <b>360° Damage Sheet &amp; Requirement Cross-Linking</b>, <b>Chronic Defaulter Detection</b>, and <b>City-Wise Health Scorecards</b>.
+            Executive fleet monitoring, 360° vehicle lifecycle audits, site uptime rankings, and chronic defaulter detection.
           </p>
+        </div>
+
+        {/* Top Executive Action Buttons */}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={handlePrintReport}
+            className="secondary-button"
+            style={{
+              padding: '8px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '8px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'rgba(255, 255, 255, 0.06)',
+              border: '1px solid var(--border-color)',
+              color: 'var(--text-main)',
+              cursor: 'pointer'
+            }}
+            title="Print formal management audit report (PDF / A4 print)"
+          >
+            🖨️ Print Executive Report
+          </button>
+
+          <button
+            type="button"
+            onClick={handleCopyExecutiveWhatsApp}
+            style={{
+              padding: '8px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '8px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'rgba(37, 211, 102, 0.15)',
+              border: '1px solid rgba(37, 211, 102, 0.4)',
+              color: '#25d366',
+              cursor: 'pointer'
+            }}
+            title="Copy formatted WhatsApp summary to share with coordinators"
+          >
+            {copyFeedback ? '✓ Copied to WhatsApp!' : '📲 WhatsApp Digest'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportFleetExcel}
+            style={{
+              padding: '8px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '8px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'rgba(59, 130, 246, 0.15)',
+              border: '1px solid rgba(59, 130, 246, 0.4)',
+              color: '#60a5fa',
+              cursor: 'pointer'
+            }}
+            title="Export complete active fleet to Excel (.xlsx)"
+          >
+            📊 Export Excel
+          </button>
+
+          <button
+            type="button"
+            onClick={handleAuditAllFleet}
+            style={{
+              padding: '8px 16px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '8px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+              border: 'none',
+              color: '#fff',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)'
+            }}
+            title="1-Click Audit across all municipal sites"
+          >
+            🚀 Audit All Sites
+          </button>
+        </div>
+      </div>
+
+      {/* Executive Fleet Health Cockpit (6 Premium KPI Tiles - ALWAYS VISIBLE) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '22px' }}>
+        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(37, 99, 235, 0.08)', border: '1px solid rgba(37, 99, 235, 0.25)' }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: '#93c5fd', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            🚗 Total Monitored Fleet
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 900, color: '#fff', marginTop: '4px' }}>
+            {fleetStats.total}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Across {fleetCities.length} Project Sites
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            🟢 Active Uptime
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 900, color: '#34d399', marginTop: '4px' }}>
+            {fleetStats.active} <span style={{ fontSize: '13px', fontWeight: 700, color: '#86efac' }}>({fleetStats.uptimePct}%)</span>
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Operational &amp; Live Streaming
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: '#fca5a5', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            🔴 Fleet Downtime
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 900, color: '#f87171', marginTop: '4px' }}>
+            {fleetStats.inactive} <span style={{ fontSize: '13px', fontWeight: 700, color: '#fca5a5' }}>({fleetStats.downtimePct}%)</span>
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Offline or Unreachable
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)' }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: '#fcd34d', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            ⚠️ Defaulter Watchlist
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 900, color: '#fbbf24', marginTop: '4px' }}>
+            {chronicVehiclesList.length}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Needs Technician Inspection
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(168, 85, 247, 0.08)', border: '1px solid rgba(168, 85, 247, 0.25)' }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: '#d8b4fe', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            🔧 Workshop / Returns
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 900, color: '#c084fc', marginTop: '4px' }}>
+            {pendingReturnsList.length}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Hardware Repair Logs
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: '14px 16px', borderRadius: '12px', background: 'rgba(14, 165, 233, 0.08)', border: '1px solid rgba(14, 165, 233, 0.25)' }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: '#7dd3fc', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            ⚡ Recharge Expiry
+          </div>
+          <div style={{ fontSize: '26px', fontWeight: 900, color: '#38bdf8', marginTop: '4px' }}>
+            {fleetStats.expiringSoon}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Expiring in &le; 15 Days
+          </div>
         </div>
       </div>
 
@@ -1273,6 +1717,68 @@ export function VehicleHistoryView({
       {/* Results View */}
       {!loadingHistory && historyData && (
         <>
+          {/* Active Audit Context Banner with 1-click back to Executive Dashboard */}
+          <div
+            style={{
+              marginBottom: '18px',
+              padding: '14px 18px',
+              background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.15) 0%, rgba(30, 41, 59, 0.7) 100%)',
+              border: '1px solid rgba(59, 130, 246, 0.35)',
+              borderRadius: '12px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '12px'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '12px', fontWeight: 800, color: '#93c5fd', background: 'rgba(59, 130, 246, 0.25)', padding: '4px 10px', borderRadius: '6px' }}>
+                AUDIT REPORT ACTIVE
+              </span>
+              <span style={{ fontSize: '14px', fontWeight: 700, color: '#fff' }}>
+                Historical Audit for: <b>{searchTerm || selectedCity || (selectedCities.length > 0 ? selectedCities.join(', ') : 'Entire Fleet')}</b>
+              </span>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                ({historyStart} to {historyEnd}) &bull; <b>{filteredResults.length}</b> Records Found
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={handlePrintReport}
+                className="secondary-button"
+                style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 700, borderRadius: '6px' }}
+                title="Print this audit report"
+              >
+                🖨️ Print Report
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setHistoryData(null);
+                  setSearchTerm('');
+                  setSelectedCity('');
+                  setSelectedCities([]);
+                }}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid var(--border-color)',
+                  color: '#cbd5e1',
+                  borderRadius: '6px',
+                  padding: '6px 12px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+                title="Return to full fleet executive dashboard"
+              >
+                ← Back to Executive Overview
+              </button>
+            </div>
+          </div>
+
           {/* Multi-IMEI Tab Switcher & Dynamic Matrix */}
           {allImeisData.list.length > 1 && (
             <div
@@ -4103,19 +4609,277 @@ export function VehicleHistoryView({
         </div>
       )}
 
-      {/* Initial Empty State Guide */}
+      {/* Initial Executive Cockpit (Rendered when no active search query is displayed) */}
       {!loadingHistory && !historyData && (
-        <div className="card" style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-muted)', borderRadius: '12px' }}>
-          <div style={{ display: 'inline-flex', padding: '16px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '50%', color: '#3b82f6', marginBottom: '16px' }}>
-            <Icon name="history" size={36} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {/* Section 1: Site-Wise Fleet Uptime & Health Scorecard */}
+          <div className="card" style={{ padding: '22px', borderRadius: '14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                  FLEET SITES AUDIT LEADERBOARD
+                </div>
+                <h3 style={{ margin: '2px 0 0 0', fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
+                  🏙️ Municipal Project Sites &amp; Real-Time Uptime Scorecard
+                </h3>
+                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Ranked breakdown across {fleetStats.cities.length} operational sites. Click <b>⚡ Audit Site</b> to inspect deep historical records for any city.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAuditAllFleet}
+                className="primary-button"
+                style={{ padding: '6px 14px', fontSize: '12px', fontWeight: 700, borderRadius: '8px' }}
+              >
+                🚀 Audit All {fleetStats.cities.length} Sites (Full Fleet)
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
+              {fleetStats.cities.map((c) => {
+                const uptimeColor = c.uptimePct >= 90 ? '#34d399' : c.uptimePct >= 75 ? '#f59e0b' : '#f87171';
+                return (
+                  <div
+                    key={c.city}
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                      borderRadius: '10px',
+                      padding: '14px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      transition: 'transform 0.15s ease, border-color 0.15s ease'
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <span style={{ fontSize: '14px', fontWeight: 800, color: '#fff' }}>
+                          📍 {c.city}
+                        </span>
+                        <span style={{ fontSize: '13px', fontWeight: 800, color: uptimeColor }}>
+                          {c.uptimePct}% Uptime
+                        </span>
+                      </div>
+
+                      {/* Progress bar */}
+                      <div style={{ height: '6px', width: '100%', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
+                        <div style={{ height: '100%', width: `${c.uptimePct}%`, background: uptimeColor, borderRadius: '3px' }} />
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                        <span>Total: <b>{c.total}</b></span>
+                        <span style={{ color: '#34d399' }}>Active: <b>{c.active}</b></span>
+                        <span style={{ color: '#f87171' }}>Down: <b>{c.inactive}</b></span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleAuditCity(c.city)}
+                      style={{
+                        width: '100%',
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(59, 130, 246, 0.35)',
+                        background: 'rgba(59, 130, 246, 0.12)',
+                        color: '#93c5fd',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      ⚡ Audit {c.city} History ➔
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', color: 'var(--text-main)' }}>
-            Google Drive Historical Fleet Intelligence Ready
-          </h3>
-          <p style={{ maxWidth: '560px', margin: '0 auto', fontSize: '13px', lineHeight: '1.6' }}>
-            Select a <b>City (Site)</b> from the dropdown or search by <b>Vehicle Number</b>, <b>IMEI</b>, or <b>Remark</b>.
-            Use the <b>Search In</b> dropdown to target specific columns (e.g. <i>City Only</i> so Jaipur search never returns Sikar or Nawa).
-          </p>
+
+          {/* Section 2: Critical Defaulter Watchlist (High-Priority Offline Vehicles) */}
+          <div className="card" style={{ padding: '22px', borderRadius: '14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                  URGENT FIELD INTERVENTION REQUIRED
+                </div>
+                <h3 style={{ margin: '2px 0 0 0', fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
+                  🚨 Critical Defaulter Watchlist ({chronicVehiclesList.length} Vehicles Offline)
+                </h3>
+                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Vehicles currently flagged as inactive, offline, or requiring technician battery/wiring inspection.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCopyExecutiveWhatsApp}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  color: '#fca5a5',
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                📲 Copy Offline Alert to WhatsApp
+              </button>
+            </div>
+
+            {chronicVehiclesList.length === 0 ? (
+              <div style={{ padding: '24px', textAlign: 'center', color: '#34d399', fontSize: '13px', fontWeight: 600 }}>
+                ✓ Outstanding! 100% of fleet vehicles are operational and active.
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ background: 'rgba(255,255,255,0.04)', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                      <th style={{ padding: '10px 14px' }}>#</th>
+                      <th style={{ padding: '10px 14px' }}>Vehicle Name</th>
+                      <th style={{ padding: '10px 14px' }}>Site / City</th>
+                      <th style={{ padding: '10px 14px' }}>IMEI Number</th>
+                      <th style={{ padding: '10px 14px' }}>SIM / Phone</th>
+                      <th style={{ padding: '10px 14px' }}>Status</th>
+                      <th style={{ padding: '10px 14px' }}>Last Seen</th>
+                      <th style={{ padding: '10px 14px' }}>Technician Remark</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Executive Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chronicVehiclesList.slice(0, 12).map((v, idx) => (
+                      <tr key={v.imei || idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{idx + 1}</td>
+                        <td style={{ padding: '10px 14px', fontWeight: 800, color: '#f87171' }}>
+                          🚗 {v.vehicle || 'Unknown'}
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
+                            {v.city || '—'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: '#cbd5e1' }}>
+                          {v.imei || '—'}
+                        </td>
+                        <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
+                          {v.sim || '—'}
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <span style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid #ef4444', color: '#fca5a5', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 700 }}>
+                            {v.roadcastStatus || 'Inactive'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px 14px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                          {v.lastUpdate || '—'}
+                        </td>
+                        <td style={{ padding: '10px 14px', fontSize: '11px', color: '#fbbf24', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {v.remark || v.inactiveRunningRemark || 'No remark logged'}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleAuditVehicle(v.vehicle, v.imei)}
+                              style={{
+                                background: 'rgba(59, 130, 246, 0.2)',
+                                border: '1px solid #3b82f6',
+                                color: '#93c5fd',
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                              title="Audit historical daily CSV logs for this vehicle"
+                            >
+                              🔍 Audit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDossierFromDevice(v)}
+                              style={{
+                                background: 'rgba(168, 85, 247, 0.2)',
+                                border: '1px solid #a855f7',
+                                color: '#d8b4fe',
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                              title="Open 360° vehicle lifecycle dossier modal"
+                            >
+                              📋 360° Dossier
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Section 3: Hardware Workshop & Return Tracking Cross-Link */}
+          {pendingReturnsList.length > 0 && (
+            <div className="card" style={{ padding: '22px', borderRadius: '14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
+              <div style={{ marginBottom: '14px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                  HARDWARE WORKSHOP CROSS-LINK
+                </div>
+                <h3 style={{ margin: '2px 0 0 0', fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
+                  🔧 Workshop Return &amp; Sensor Replacement Tracking
+                </h3>
+                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Devices submitted from municipal sites for workshop diagnosis, repair, or warranty exchange.
+                </p>
+              </div>
+
+              <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ background: 'rgba(255,255,255,0.04)', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                      <th style={{ padding: '8px 12px' }}>#</th>
+                      <th style={{ padding: '8px 12px' }}>Vehicle Plate</th>
+                      <th style={{ padding: '8px 12px' }}>IMEI Number</th>
+                      <th style={{ padding: '8px 12px' }}>Site / City</th>
+                      <th style={{ padding: '8px 12px' }}>Reported Defect / Reason</th>
+                      <th style={{ padding: '8px 12px' }}>Status</th>
+                      <th style={{ padding: '8px 12px' }}>Date Submitted</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingReturnsList.map((r, rIdx) => (
+                      <tr key={r.id || rIdx} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '8px 12px', color: 'var(--text-muted)' }}>{rIdx + 1}</td>
+                        <td style={{ padding: '8px 12px', fontWeight: 700, color: '#fff' }}>{r.vehicleNumber || '—'}</td>
+                        <td style={{ padding: '8px 12px', fontFamily: 'monospace', color: '#c7d2fe' }}>{r.imei || '—'}</td>
+                        <td style={{ padding: '8px 12px' }}>{r.city || '—'}</td>
+                        <td style={{ padding: '8px 12px', color: '#fbbf24' }}>{r.reason || r.defect || 'Hardware Repair'}</td>
+                        <td style={{ padding: '8px 12px' }}>
+                          <span style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#d8b4fe', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
+                            {r.status || 'Pending'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 12px', fontSize: '11px', color: 'var(--text-muted)' }}>{r.date || r.createdAt || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
