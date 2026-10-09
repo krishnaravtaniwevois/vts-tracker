@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Icon } from './Icons';
-import { getInactiveRunningDevices, updateInactiveRunningRemark, sendCustomNotification } from '../services/api';
+import {
+  getInactiveRunningDevices,
+  updateInactiveRunningRemark,
+  sendCustomNotification,
+  syncInactiveRunningSheetApi,
+  getWeeklyContinuousInactiveRunningApi
+} from '../services/api';
 import { exportToExcelFile, exportToCsvFile } from '../services/exportUtils';
 
 export function InactiveRunningView({
@@ -163,6 +169,15 @@ export function InactiveRunningView({
   const [anomalySearch, setAnomalySearch] = useState('');
   const [anomalyCityFilter, setAnomalyCityFilter] = useState('All');
 
+  // Dynamic Google Sheet Sync State ("VTS Inactive + running Vehicle")
+  const [syncingSheet, setSyncingSheet] = useState(false);
+  const [syncToast, setSyncToast] = useState(null);
+
+  // 1-Week Continuous Streak / Chronic Defaulters State (Drive Daily Reports)
+  const [weeklyData, setWeeklyData] = useState(null);
+  const [loadingWeekly, setLoadingWeekly] = useState(false);
+  const [weeklyFilterActive, setWeeklyFilterActive] = useState(false);
+
   const [editingImei, setEditingImei] = useState(null);
   const [editingRemark, setEditingRemark] = useState('');
   const [savingImei, setSavingImei] = useState(null);
@@ -184,9 +199,64 @@ export function InactiveRunningView({
     }
   };
 
+  const fetchWeeklyContinuous = async () => {
+    setLoadingWeekly(true);
+    try {
+      const res = await getWeeklyContinuousInactiveRunningApi();
+      if (res && res.success) {
+        setWeeklyData(res);
+      }
+    } catch (err) {
+      console.warn('Failed to load weekly continuous defaulters:', err);
+    } finally {
+      setLoadingWeekly(false);
+    }
+  };
+
   useEffect(() => {
     fetchAnomalyDevices();
+    fetchWeeklyContinuous();
   }, []);
+
+  // Map of chronic defaulters by IMEI for instant lookup
+  const weeklyDefaultersMap = useMemo(() => {
+    const map = {};
+    if (weeklyData && weeklyData.chronicDefaulters) {
+      weeklyData.chronicDefaulters.forEach((item) => {
+        map[String(item.uniqueid).trim()] = item;
+      });
+    }
+    return map;
+  }, [weeklyData]);
+
+  const handleSyncToGoogleSheet = async () => {
+    setSyncingSheet(true);
+    setSyncToast(null);
+    try {
+      const res = await syncInactiveRunningSheetApi();
+      if (res && res.success) {
+        setSyncToast({
+          type: 'success',
+          text: `✓ ${res.message || 'Successfully synced vehicles to "VTS Inactive + running Vehicle" sheet!'}`
+        });
+        await fetchAnomalyDevices();
+        if (onRefresh) onRefresh();
+      } else {
+        setSyncToast({
+          type: 'error',
+          text: `❌ ${res?.error || 'Failed to sync to Google Sheet.'}`
+        });
+      }
+    } catch (err) {
+      setSyncToast({
+        type: 'error',
+        text: `❌ Error syncing sheet: ${err.message}`
+      });
+    } finally {
+      setSyncingSheet(false);
+      setTimeout(() => setSyncToast(null), 6000);
+    }
+  };
 
   const anomalyCities = useMemo(() => {
     const set = new Set();
@@ -198,6 +268,11 @@ export function InactiveRunningView({
 
   const filteredAnomaly = useMemo(() => {
     return anomalyDevices.filter((d) => {
+      // 1-Week Chronic Defaulter filter
+      if (weeklyFilterActive && !weeklyDefaultersMap[String(d.uniqueid).trim()]) {
+        return false;
+      }
+
       if (anomalySearch) {
         const q = anomalySearch.toLowerCase().trim();
         const match =
@@ -211,7 +286,7 @@ export function InactiveRunningView({
       if (anomalyCityFilter !== 'All' && d.city !== anomalyCityFilter) return false;
       return true;
     });
-  }, [anomalyDevices, anomalySearch, anomalyCityFilter]);
+  }, [anomalyDevices, anomalySearch, anomalyCityFilter, weeklyFilterActive, weeklyDefaultersMap]);
 
   const handleStartEdit = (item, e) => {
     e.stopPropagation();
@@ -565,30 +640,54 @@ export function InactiveRunningView({
             </div>
           )}
 
+          {syncToast && (
+            <div className={`notification-banner ${syncToast.type}`} style={{ marginBottom: '16px' }}>
+              <Icon name={syncToast.type === 'success' ? 'check' : 'alert'} size={18} />
+              <span>{syncToast.text}</span>
+            </div>
+          )}
+
           {/* KPI Cards */}
           <div className="kpi-grid" style={{ marginBottom: '20px' }}>
             <div className="kpi-card danger">
-              <div className="kpi-title">Anomaly Devices Count</div>
+              <div className="kpi-title">Live Anomaly Devices</div>
               <div className="kpi-value">{anomalyDevices.length}</div>
-              <div className="kpi-subtitle">Inactive VTS on physically running vehicles</div>
+              <div className="kpi-subtitle">Inactive VTS on physically running vehicles today</div>
+            </div>
+
+            <div
+              className={`kpi-card danger ${weeklyFilterActive ? 'active' : ''}`}
+              onClick={() => setWeeklyFilterActive(!weeklyFilterActive)}
+              style={{ cursor: 'pointer', borderLeft: '4px solid #ef4444' }}
+              title="Click to toggle filter for 1-Week Chronic (7 Days) Defaulters"
+            >
+              <div className="kpi-title" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Icon name="alert" size={16} /> 1-Week Chronic Defaulters
+              </div>
+              <div className="kpi-value" style={{ color: '#f87171' }}>
+                {loadingWeekly ? '...' : (weeklyData?.chronicCount || 0)}
+              </div>
+              <div className="kpi-subtitle">
+                {weeklyFilterActive ? '✓ Filtered (Click to Show All)' : 'Continuously Inactive+Running across 7 daily Drive reports'}
+              </div>
             </div>
 
             <div className="kpi-card">
               <div className="kpi-title">Affected Cities</div>
               <div className="kpi-value">{anomalyCities.length > 1 ? anomalyCities.length - 1 : 0}</div>
-              <div className="kpi-subtitle">Locations requiring physical inspection</div>
+              <div className="kpi-subtitle">Locations requiring immediate physical inspection</div>
             </div>
 
-            <div className="kpi-card accent">
-              <div className="kpi-title">Auto-Clear Rule</div>
-              <div className="kpi-value">Active</div>
-              <div className="kpi-subtitle">Remarks automatically clear when VTS goes Active</div>
+            <div className="kpi-card accent" style={{ borderLeft: '4px solid #10b981' }}>
+              <div className="kpi-title">Dynamic Target Sheet</div>
+              <div className="kpi-value" style={{ color: '#34d399', fontSize: '18px' }}>Auto-Synced</div>
+              <div className="kpi-subtitle">Sheet: "VTS Inactive + running Vehicle" (resolved autos-removed)</div>
             </div>
           </div>
 
           {/* Filter Bar */}
           <div className="panel" style={{ padding: '12px 16px', marginBottom: '16px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div className="search-box" style={{ flex: 1, minWidth: '240px' }}>
+            <div className="search-box" style={{ flex: 1, minWidth: '220px' }}>
               <Icon name="search" size={16} />
               <input
                 type="text"
@@ -609,17 +708,77 @@ export function InactiveRunningView({
               </select>
             </div>
 
+            {/* 1-Week Chronic Streak Toggle Filter Pill */}
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setWeeklyFilterActive(!weeklyFilterActive)}
+              style={{
+                borderColor: weeklyFilterActive ? '#ef4444' : '#475569',
+                background: weeklyFilterActive ? 'rgba(239, 68, 68, 0.25)' : 'transparent',
+                color: weeklyFilterActive ? '#fca5a5' : '#cbd5e1',
+                fontWeight: weeklyFilterActive ? 700 : 500,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              title="Filter to only show vehicles continuously Inactive + RUNNING across the past week of daily Drive reports"
+            >
+              <Icon name="alert" size={14} style={{ color: '#ef4444' }} />
+              <span>{weeklyFilterActive ? '✓ 1-Week Chronic Only' : `🚨 1-Week Chronic (${weeklyData?.chronicCount || 0})`}</span>
+            </button>
+
             <div className="table-actions-inline">
-              <button className="secondary-button" onClick={fetchAnomalyDevices} disabled={loadingAnomaly}>
-                <Icon name="refresh" size={14} className={loadingAnomaly ? 'spin' : ''} />
-                {loadingAnomaly ? 'Refreshing...' : 'Refresh List'}
+              {/* Dynamic Google Sheet Sync Button */}
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleSyncToGoogleSheet}
+                disabled={syncingSheet}
+                style={{
+                  background: 'linear-gradient(135deg, #059669, #10b981)',
+                  borderColor: '#059669',
+                  boxShadow: '0 2px 6px rgba(16, 185, 129, 0.3)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+                title="Dynamic Sync: Updates 'VTS Inactive + running Vehicle' tab in Google Sheets. Automatically removes any vehicle that became active or stopped running!"
+              >
+                <Icon name="refresh" size={14} className={syncingSheet ? 'spin' : ''} />
+                <span>{syncingSheet ? 'Syncing...' : '🔄 Sync to Google Sheet'}</span>
               </button>
+
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  fetchAnomalyDevices();
+                  fetchWeeklyContinuous();
+                }}
+                disabled={loadingAnomaly || loadingWeekly}
+              >
+                <Icon name="refresh" size={14} className={(loadingAnomaly || loadingWeekly) ? 'spin' : ''} />
+                <span>Refresh</span>
+              </button>
+
               <button
                 className="secondary-button"
                 onClick={() => exportToExcelFile(filteredAnomaly, `Inactive_Running_Vehicles`)}
               >
                 <Icon name="download" size={13} /> Excel ({filteredAnomaly.length})
               </button>
+
+              {weeklyData?.chronicCount > 0 && (
+                <button
+                  className="secondary-button"
+                  onClick={() => exportToExcelFile(weeklyData.chronicDefaulters, `Weekly_Continuous_Defaulters`)}
+                  style={{ color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+                  title="Export 1-Week Continuous Chronic Defaulters list"
+                >
+                  <Icon name="download" size={13} /> 1-Week Chronic ({weeklyData.chronicCount})
+                </button>
+              )}
+
               <button
                 className="primary-button"
                 onClick={handleNotifyManagers}
@@ -644,6 +803,7 @@ export function InactiveRunningView({
                     <th>CITY</th>
                     <th>VTS STATUS</th>
                     <th>VEHICLE STATUS</th>
+                    <th>1-WEEK DRIVE STREAK</th>
                     <th>LAST ROADCAST UPDATE</th>
                     <th>VTS TYPE</th>
                     <th>INACTIVE-RUNNING REMARK (COL P)</th>
@@ -655,6 +815,7 @@ export function InactiveRunningView({
                     const isEditing = editingImei === row.uniqueid;
                     const isSaving = savingImei === row.uniqueid;
                     const statusState = saveStatus[row.uniqueid];
+                    const chronicInfo = weeklyDefaultersMap[String(row.uniqueid).trim()];
 
                     return (
                       <tr key={row.uniqueid}>
@@ -668,6 +829,19 @@ export function InactiveRunningView({
                         </td>
                         <td>
                           <span className="final-status-badge final-running">RUNNING</span>
+                        </td>
+                        <td>
+                          {chronicInfo ? (
+                            <span
+                              className={`status-badge ${chronicInfo.severity === 'CRITICAL' ? 'status-expired' : 'status-pending'}`}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', padding: '3px 8px' }}
+                              title={`Continuous Inactive+Running on Drive reports: ${chronicInfo.datesDetected?.join(', ')}`}
+                            >
+                              🔥 {chronicInfo.streakDisplay}
+                            </span>
+                          ) : (
+                            <span style={{ color: '#94a3b8', fontSize: '11px' }}>—</span>
+                          )}
                         </td>
                         <td>{row.lastUpdate || '—'}</td>
                         <td><small className="text-muted">{row.vtsType || 'VTS Package 4G'}</small></td>
@@ -715,9 +889,9 @@ export function InactiveRunningView({
                   })}
                   {filteredAnomaly.length === 0 && (
                     <tr>
-                      <td colSpan="11" className="empty-state">
+                      <td colSpan="12" className="empty-state">
                         <Icon name="check" size={32} />
-                        <p>No anomaly devices found! All running vehicles have active VTS tracking.</p>
+                        <p>{weeklyFilterActive ? 'No 1-week continuous defaulters found for this filter!' : 'No anomaly devices found! All running vehicles have active VTS tracking.'}</p>
                       </td>
                     </tr>
                   )}

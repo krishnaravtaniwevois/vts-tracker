@@ -1,6 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Icon } from './Icons';
-import { sendCustomNotification, getDataFillStatus, getCameraFillStatus, getInactiveRunningDevices } from '../services/api';
+import {
+  sendCustomNotification,
+  getDataFillStatus,
+  getCameraFillStatus,
+  getInactiveRunningDevices,
+  getWeeklyContinuousInactiveRunningApi
+} from '../services/api';
 
 export function NotificationCenterView({ devices = [], users = [], _onRefresh }) {
   // Step 1: Recipients Selection
@@ -13,7 +19,7 @@ export function NotificationCenterView({ devices = [], users = [], _onRefresh })
   });
 
   // Step 2: Notification Type
-  // 'renewal_due' | 'inactive_devices' | 'status_override' | 'data_not_filled' | 'camera_not_filled' | 'custom_selection'
+  // 'renewal_due' | 'inactive_devices' | 'chronic_inactive_running' | 'status_override' | 'data_not_filled' | 'camera_not_filled' | 'custom_selection'
   const [notificationType, setNotificationType] = useState('renewal_due');
   const [customMessage, setCustomMessage] = useState('');
   const [selectedDeviceIds, setSelectedDeviceIds] = useState([]);
@@ -22,6 +28,7 @@ export function NotificationCenterView({ devices = [], users = [], _onRefresh })
   const [dataFillList, setDataFillList] = useState([]);
   const [cameraFillList, setCameraFillList] = useState([]);
   const [_inactiveRunningList, setInactiveRunningList] = useState([]);
+  const [chronicDefaultersList, setChronicDefaultersList] = useState([]);
 
   // Send state
   const [isSending, setIsSending] = useState(false);
@@ -30,14 +37,18 @@ export function NotificationCenterView({ devices = [], users = [], _onRefresh })
   useEffect(() => {
     const fetchAuxData = async () => {
       try {
-        const [df, cf, ir] = await Promise.all([
+        const [df, cf, ir, weekly] = await Promise.all([
           getDataFillStatus(),
           getCameraFillStatus(),
-          getInactiveRunningDevices()
+          getInactiveRunningDevices(),
+          getWeeklyContinuousInactiveRunningApi()
         ]);
         setDataFillList(df || []);
         setCameraFillList(cf || []);
         setInactiveRunningList(ir || []);
+        if (weekly && weekly.chronicDefaulters) {
+          setChronicDefaultersList(weekly.chronicDefaulters);
+        }
       } catch (err) {
         console.warn('Aux data fetch error:', err);
       }
@@ -57,6 +68,9 @@ export function NotificationCenterView({ devices = [], users = [], _onRefresh })
     if (notificationType === 'inactive_devices') {
       return devices.filter((d) => String(d.roadcastStatus || '').toLowerCase() === 'inactive');
     }
+    if (notificationType === 'chronic_inactive_running') {
+      return chronicDefaultersList;
+    }
     if (notificationType === 'status_override') {
       return devices.filter((d) => Boolean(d.statusOverride));
     }
@@ -70,7 +84,7 @@ export function NotificationCenterView({ devices = [], users = [], _onRefresh })
       return devices.filter((d) => selectedDeviceIds.includes(d.imei));
     }
     return [];
-  }, [notificationType, devices, dataFillList, cameraFillList, selectedDeviceIds]);
+  }, [notificationType, devices, dataFillList, cameraFillList, chronicDefaultersList, selectedDeviceIds]);
 
   const handleToggleRecipient = (email) => {
     setSelectedRecipients((prev) =>
@@ -103,6 +117,7 @@ export function NotificationCenterView({ devices = [], users = [], _onRefresh })
     const typeLabels = {
       renewal_due: 'Renewal Due Review Request',
       inactive_devices: 'Inactive Roadcast Devices Alert',
+      chronic_inactive_running: '🚨 1-Week Chronic Defaulters (Inactive + RUNNING) Urgent Alert',
       status_override: 'Status Override / At Site Devices',
       data_not_filled: 'Vendor City Vehicle Data Missing Entry Alert',
       camera_not_filled: 'Camera Status Data Reminder',
@@ -228,6 +243,20 @@ export function NotificationCenterView({ devices = [], users = [], _onRefresh })
               <div className="type-card-body">
                 <strong style={{ fontSize: '13px' }}>Inactive Devices</strong>
                 <p className="text-muted" style={{ fontSize: '12px', margin: '2px 0 0 0' }}>Devices showing Status on Roadcast = Inactive</p>
+              </div>
+            </label>
+
+            <label className={`type-option-card ${notificationType === 'chronic_inactive_running' ? 'active' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', borderRadius: '6px', border: notificationType === 'chronic_inactive_running' ? '1px solid #ef4444' : '1px solid var(--border-color, #334155)', background: notificationType === 'chronic_inactive_running' ? 'rgba(239, 68, 68, 0.12)' : 'var(--card-bg, #1e293b)', cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name="notifType"
+                value="chronic_inactive_running"
+                checked={notificationType === 'chronic_inactive_running'}
+                onChange={() => setNotificationType('chronic_inactive_running')}
+              />
+              <div className="type-card-body">
+                <strong style={{ fontSize: '13px', color: '#f87171' }}>🚨 1-Week Chronic Defaulters ({chronicDefaultersList.length})</strong>
+                <p className="text-muted" style={{ fontSize: '12px', margin: '2px 0 0 0' }}>Vehicles continuously Inactive on Roadcast while RUNNING for past 7 days</p>
               </div>
             </label>
 

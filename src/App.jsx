@@ -19,7 +19,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { LoginScreen } from './components/LoginScreen';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
 import { TabErrorBoundary } from './components/ErrorBoundary';
-import { fetchAllFleetData, getStoredApiUrl, getCurrentUser, setCurrentUser, saveDailySnapshotApi } from './services/api';
+import { fetchAllFleetData, getStoredApiUrl, getCurrentUser, setCurrentUser, saveDailySnapshotApi, getWeeklyContinuousInactiveRunningApi } from './services/api';
 export function App() {
   const [activeNav, setActiveNavState] = useState(() => {
     return localStorage.getItem('vts_tracker_active_nav') || 'Overview';
@@ -60,28 +60,30 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [isSavingDaily, setIsSavingDaily] = useState(false);
   const [saveToast, setSaveToast] = useState(null);
+  const [weeklyChronicCount, setWeeklyChronicCount] = useState(0);
 
   const handleSaveDailySnapshot = async () => {
     setIsSavingDaily(true);
     setSaveToast(null);
     try {
-      const res = await saveDailySnapshotApi({ saveSheetTab: true });
+      // Per user instruction: Save to Drive folder as CSV only. Do NOT create any date sheet/tab in spreadsheet!
+      const res = await saveDailySnapshotApi();
       if (res && res.success) {
         setSaveToast({
           type: 'success',
-          text: `✅ ${res.message || "Today's sheet saved successfully!"}`
+          text: `✅ ${res.message || "Today's report saved in Google Drive!"}`
         });
         loadData();
       } else {
         setSaveToast({
           type: 'error',
-          text: `❌ ${res?.error || 'Failed to save sheet snapshot.'}`
+          text: `❌ ${res?.error || 'Failed to save report.'}`
         });
       }
     } catch (err) {
       setSaveToast({
         type: 'error',
-        text: `❌ Error saving sheet: ${err.message}`
+        text: `❌ Error saving report: ${err.message}`
       });
     } finally {
       setIsSavingDaily(false);
@@ -108,6 +110,13 @@ export function App() {
       if (data.currentUser) setCurrentUserState(data.currentUser);
       setIsMockMode(!!data.isMock);
       setLastSynced(new Date());
+
+      // Check 1-Week Chronic Defaulters in background
+      getWeeklyContinuousInactiveRunningApi()
+        .then((res) => {
+          if (res && res.success) setWeeklyChronicCount(res.chronicCount || 0);
+        })
+        .catch(() => {});
     } catch (err) {
       console.error('Error loading data:', err);
     } finally {
@@ -131,6 +140,12 @@ export function App() {
           if (data.currentUser) setCurrentUserState(data.currentUser);
           setIsMockMode(!!data.isMock);
           setLastSynced(new Date());
+
+          getWeeklyContinuousInactiveRunningApi()
+            .then((res) => {
+              if (!ignore && res && res.success) setWeeklyChronicCount(res.chronicCount || 0);
+            })
+            .catch(() => {});
         }
       } catch (err) {
         console.error('Error loading data:', err);
@@ -170,7 +185,7 @@ export function App() {
     { label: 'Overview', icon: 'grid' },
     { label: 'Devices', icon: 'device', count: scopedDevices.length || undefined },
     { label: 'Renewals', icon: 'battery', count: attentionList.length || undefined },
-    { label: 'Inactive + Running', icon: 'alert' },
+    { label: 'Inactive + Running', icon: 'alert', count: weeklyChronicCount > 0 ? `${weeklyChronicCount} Chronic` : undefined },
     { label: 'Data Fill Status', icon: 'check' },
     { label: 'Notifications', icon: 'mail' },
     { label: 'Import Roadcast', icon: 'upload' },
@@ -302,7 +317,7 @@ export function App() {
           </div>
 
           <div className="header-actions">
-            {/* 1-Click Save Daily Sheet Snapshot */}
+            {/* 1-Click Save Daily Drive Report */}
             <button
               type="button"
               onClick={handleSaveDailySnapshot}
@@ -323,16 +338,16 @@ export function App() {
                 transition: 'all 0.15s ease',
                 whiteSpace: 'nowrap'
               }}
-              title="Save or update today's sheet snapshot to Google Drive (replaces previous version of today)"
+              title="Save or update today's CSV report directly into Google Drive folder (no sheet tab created)"
             >
               {isSavingDaily ? (
                 <>
                   <Icon name="refresh" size={14} className="spin" />
-                  <span>Saving Today's Sheet...</span>
+                  <span>Saving to Drive...</span>
                 </>
               ) : (
                 <>
-                  <span>💾 Save Today's Sheet</span>
+                  <span>💾 Save Daily Report (Drive)</span>
                 </>
               )}
             </button>
@@ -355,18 +370,44 @@ export function App() {
                 aria-label="Attention alerts"
               >
                 <Icon name="bell" size={18} />
-                {attentionList.length > 0 && <span>{attentionList.length}</span>}
+                {(attentionList.length > 0 || weeklyChronicCount > 0) && (
+                  <span>{attentionList.length + (weeklyChronicCount > 0 ? 1 : 0)}</span>
+                )}
               </button>
 
               {showNotifications && (
                 <div className="notification-dropdown">
                   <div className="dropdown-header">
-                    <h4>Attention Required ({attentionList.length})</h4>
+                    <h4>Attention Required ({attentionList.length + (weeklyChronicCount > 0 ? 1 : 0)})</h4>
                     <button className="close-mini" onClick={() => setShowNotifications(false)}>
                       <Icon name="close" size={14} />
                     </button>
                   </div>
                   <div className="dropdown-list">
+                    {/* 1-Week Chronic Defaulter High-Priority Alert */}
+                    {weeklyChronicCount > 0 && (
+                      <div
+                        className="notification-item"
+                        style={{
+                          background: 'rgba(239, 68, 68, 0.15)',
+                          borderLeft: '3px solid #ef4444',
+                          marginBottom: '8px',
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => {
+                          setActiveNav('Inactive + Running');
+                          setShowNotifications(false);
+                        }}
+                      >
+                        <span className="dot red" />
+                        <div>
+                          <strong style={{ color: '#f87171' }}>🚨 1-Week Chronic Defaulters ({weeklyChronicCount})</strong>
+                          <small style={{ color: '#cbd5e1' }}>
+                            Continuous Inactive + RUNNING for past 7 days &bull; Click to inspect
+                          </small>
+                        </div>
+                      </div>
+                    )}
                     {attentionList.slice(0, 8).map((d) => (
                       <div
                         key={d.imei}
@@ -519,7 +560,9 @@ export function App() {
             <div style={{ display: activeNav === 'Inactive + Running' ? 'block' : 'none' }}>
               <TabErrorBoundary tabName="Inactive + Running">
                 <InactiveRunningView
+                  devices={scopedDevices}
                   users={users}
+                  onSelectDevice={setSelectedDevice}
                   onRefresh={loadData}
                 />
               </TabErrorBoundary>

@@ -23,6 +23,8 @@ var VTS_CONFIG = {
   VEHICLE_RECORD_TAB_NAME: 'Sitewise Vehicle Record',
   RENEWAL_MONTH_WISE_SHEET_ID: '1GjJ8ewJPz_1F6xil8qdklgTRHsDe21xtbw5-dt2x2Ug',
   DAILY_REPORTS_FOLDER_ID: '1WqrIXW7abqYzCug_xz4LbzVag2plBDnB',
+  INACTIVE_RUNNING_SHEET_ID: '10qSJ2aVjkpMeyJVP3MSRif2YFbcJ0fsYKw6UdCo2Rcc',
+  INACTIVE_RUNNING_TAB_NAME: 'VTS Inactive + running Vehicle',
   EXPIRY_ALERT_DAYS: 15,
   SHARED_SECRET_TOKEN: '' // Optional token security
 };
@@ -83,6 +85,8 @@ function doGet(e) {
     else if (action === 'searchVehicleHistory') result = searchVehicleHistoryApi(e ? e.parameter : {});
     else if (action === 'saveDailySnapshot') result = saveDailySheetSnapshot(e ? e.parameter : {});
     else if (action === 'setupDailySaveTrigger') result = setupDaily445Trigger();
+    else if (action === 'syncInactiveRunningSheet') result = syncInactiveRunningSheet();
+    else if (action === 'getWeeklyContinuousInactiveRunning') result = getWeeklyContinuousInactiveRunning(e ? e.parameter : {});
     else result = { status: 'error', message: 'Unknown action: ' + action };
 
     return ContentService.createTextOutput(JSON.stringify({
@@ -123,7 +127,7 @@ function doPost(e) {
       'applyBatchRenewals', 'batchUpdateLicenseDates', 'finalizeRenewalSession', 'saveUser',
       'deleteUser', 'submitRequirementRequest', 'submitReturnRequest', 'refreshFinalStatus',
       'protectColumnH', 'updateStatusOverride', 'updateInactiveRunningRemark', 'setActiveRenewalCycleTab',
-      'setRenewalSheetUrl', 'saveDailySnapshot', 'setupDailySaveTrigger'
+      'setRenewalSheetUrl', 'saveDailySnapshot', 'setupDailySaveTrigger', 'syncInactiveRunningSheet'
     ];
 
     var executeAction = function() {
@@ -157,6 +161,8 @@ function doPost(e) {
       if (action === 'setupMorningFleetTrigger') return setupMorningFleetTrigger();
       if (action === 'saveDailySnapshot') return saveDailySheetSnapshot(payload);
       if (action === 'setupDailySaveTrigger') return setupDaily445Trigger();
+      if (action === 'syncInactiveRunningSheet') return syncInactiveRunningSheet();
+      if (action === 'getWeeklyContinuousInactiveRunning') return getWeeklyContinuousInactiveRunning(payload);
       return { success: false, message: 'Invalid action: ' + action };
     };
 
@@ -4225,44 +4231,403 @@ function saveDailySheetSnapshot(payload) {
     }
     var csvContent = csvRows.join('\r\n');
 
-    // 4. CREATE FRESH CSV FILE IN DRIVE
+    // 4. CREATE FRESH CSV FILE IN DRIVE (SINGLE VERSION PER DAY)
     var newFile = folder.createFile(standardFileName, csvContent, MimeType.CSV);
 
-    // 5. (OPTIONAL) UPDATE TAB IN SPREADSHEET IF REQUESTED
-    var tabUpdated = null;
-    if (payload && (payload.saveSheetTab || payload.createTab)) {
-      var tabName = Utilities.formatDate(today, timeZone, "d MMM yyyy");
-      var targetSS = ss;
-      var existingTab = targetSS.getSheetByName(tabName);
-      if (existingTab) {
-        existingTab.clear();
-        existingTab.getRange(1, 1, data.length, data[0].length).setValues(data);
-        tabUpdated = tabName + " (Updated in place)";
-      } else {
-        var newTab = targetSS.insertSheet(tabName);
-        newTab.getRange(1, 1, data.length, data[0].length).setValues(data);
-        tabUpdated = tabName + " (Created fresh)";
+    // 5. CLEANUP: Ensure NO accidental date tabs exist in Master Spreadsheet
+    // (Per user requirement: saving the file must NEVER create a date tab in Google Sheets; only save file to Drive!)
+    try {
+      var allSheets = ss.getSheets();
+      var dateTabRegex = /^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/i;
+      for (var s = 0; s < allSheets.length; s++) {
+        var shName = allSheets[s].getName();
+        if (dateTabRegex.test(shName) && shName !== '900' && shName !== 'Sitewise Vehicle Record') {
+          Logger.log("🗑️ Cleaned up accidental date tab: " + shName);
+          ss.deleteSheet(allSheets[s]);
+        }
       }
+    } catch (cleanErr) {
+      Logger.log("Date tab cleanup notice: " + cleanErr.toString());
+    }
+
+    // 6. DYNAMIC SYNC: Continuously sync current Inactive + RUNNING vehicles into dedicated spreadsheet
+    var syncResult = null;
+    try {
+      syncResult = syncInactiveRunningSheet();
+    } catch (syncErr) {
+      Logger.log("Inactive-running sync notice: " + syncErr.toString());
     }
 
     var timeStr = Utilities.formatDate(today, timeZone, "hh:mm a, dd MMM yyyy");
     PropertiesService.getScriptProperties().setProperty('LAST_DAILY_SAVE_TIMESTAMP', timeStr);
     PropertiesService.getScriptProperties().setProperty('LAST_DAILY_SAVE_FILE_URL', newFile.getUrl());
 
-    Logger.log("✅ Successfully saved updated snapshot: " + standardFileName + " at " + timeStr);
+    Logger.log("✅ Successfully saved updated snapshot to Drive: " + standardFileName + " at " + timeStr);
 
     return {
       success: true,
-      message: "Today's sheet successfully saved/updated at " + timeStr + "! (" + (filesToTrash.length > 0 ? (filesToTrash.length + " previous version replaced") : "First save of today") + ")",
+      message: "Today's report successfully saved in Google Drive at " + timeStr + "! (" + (filesToTrash.length > 0 ? (filesToTrash.length + " previous version replaced") : "First save of today") + ")",
       fileName: standardFileName,
       fileUrl: newFile.getUrl(),
       replacedCount: filesToTrash.length,
-      tabUpdated: tabUpdated,
+      inactiveRunningSync: syncResult,
       timestamp: timeStr,
       totalRows: data.length
     };
   } catch (err) {
     Logger.log("❌ Error in saveDailySheetSnapshot: " + err.toString());
+    return { success: false, error: err.toString() };
+  }
+}
+
+/**
+ * ============================================================================
+ * DYNAMIC SYNC: VTS INACTIVE + RUNNING VEHICLES SPREADSHEET
+ * ============================================================================
+ * Target Spreadsheet: 10qSJ2aVjkpMeyJVP3MSRif2YFbcJ0fsYKw6UdCo2Rcc ("VTS +camera Off")
+ * Target Tab: "VTS Inactive + running Vehicle"
+ *
+ * Rules:
+ * 1. Synchronizes the real-time list of vehicles where Roadcast = 'Inactive' AND Final = 'RUNNING'.
+ * 2. If a vehicle BECOMES ACTIVE or STOPS RUNNING, it is DYNAMICALLY REMOVED from this sheet.
+ * 3. Preserves any existing technician remarks (Columns J & K) keyed by Uniqueid (IMEI).
+ * 4. Can be called manually via Web App button or Google Sheets menu, or scheduled automatically.
+ * ============================================================================
+ */
+function syncInactiveRunningSheet() {
+  try {
+    var targetSpreadsheetId = VTS_CONFIG.INACTIVE_RUNNING_SHEET_ID || '10qSJ2aVjkpMeyJVP3MSRif2YFbcJ0fsYKw6UdCo2Rcc';
+    var targetTabName = VTS_CONFIG.INACTIVE_RUNNING_TAB_NAME || 'VTS Inactive + running Vehicle';
+
+    var targetSS = safeOpenSpreadsheet(targetSpreadsheetId);
+    if (!targetSS) {
+      return { success: false, error: 'Could not open Target Spreadsheet ID: ' + targetSpreadsheetId };
+    }
+
+    var targetSheet = targetSS.getSheetByName(targetTabName);
+    if (!targetSheet) {
+      targetSheet = targetSS.insertSheet(targetTabName);
+    }
+
+    // 1. Read existing remarks from target sheet to preserve user/technician notes
+    var existingRemarks = {};
+    var lastRow = targetSheet.getLastRow();
+    var lastCol = targetSheet.getLastColumn();
+    if (lastRow > 1 && lastCol >= 2) {
+      var existingData = targetSheet.getRange(1, 1, lastRow, Math.max(lastCol, 11)).getValues();
+      var exHeaders = existingData[0].map(function(h) { return String(h).trim().toLowerCase(); });
+      var exIdxImei = findColIndex(exHeaders, ['uniqueid', 'imei']);
+      var exIdxRemark = findColIndex(exHeaders, ['remark', 'inactive-running remark']);
+      var exIdxLastRemarkUpdate = findColIndex(exHeaders, ['last remark update']);
+
+      if (exIdxImei === -1) exIdxImei = 1; // Col B (0-based: 1)
+      if (exIdxRemark === -1) exIdxRemark = 9; // Col J (0-based: 9)
+      if (exIdxLastRemarkUpdate === -1) exIdxLastRemarkUpdate = 10; // Col K (0-based: 10)
+
+      for (var r = 1; r < existingData.length; r++) {
+        var imei = normalizeUniqueid(existingData[r][exIdxImei]);
+        if (imei) {
+          var rem = String(existingData[r][exIdxRemark] || '').trim();
+          var remUpd = String(existingData[r][exIdxLastRemarkUpdate] || '').trim();
+          if (rem) {
+            existingRemarks[imei] = {
+              remark: rem,
+              lastRemarkUpdate: remUpd
+            };
+          }
+        }
+      }
+    }
+
+    // 2. Fetch current live Inactive + RUNNING vehicles from Master Sheet
+    var currentDevices = getInactiveRunningDevices();
+    var timeZone = Session.getScriptTimeZone() || 'Asia/Kolkata';
+    var todayFormatted = Utilities.formatDate(new Date(), timeZone, "dd-MM-yyyy");
+
+    var headers = [
+      'Date',
+      'Uniqueid',
+      'Name',
+      'Phone',
+      'City',
+      'VTS Status',
+      'Vehicle Status',
+      'Last Update',
+      'VTS Type',
+      'Remark',
+      'Last Remark Update'
+    ];
+
+    var outputRows = [headers];
+
+    for (var i = 0; i < currentDevices.length; i++) {
+      var d = currentDevices[i];
+      var imei = normalizeUniqueid(d.uniqueid);
+
+      // Preserve existing remark if not updated in current devices
+      var remarkText = d.remark || '';
+      var remarkUpdateText = d.lastRemarkUpdate || '';
+      if (!remarkText && existingRemarks[imei]) {
+        remarkText = existingRemarks[imei].remark;
+        remarkUpdateText = existingRemarks[imei].lastRemarkUpdate;
+      }
+
+      outputRows.push([
+        d.date || todayFormatted,
+        "'" + String(d.uniqueid || ''), // force text format to prevent scientific notation
+        String(d.name || ''),
+        "'" + String(d.phone || ''),
+        String(d.city || ''),
+        String(d.vtsStatus || 'Inactive'),
+        String(d.vehicleStatus || 'RUNNING'),
+        String(d.lastUpdate || ''),
+        String(d.vtsType || 'VTS Package 4G'),
+        remarkText,
+        remarkUpdateText
+      ]);
+    }
+
+    // 3. Clear target sheet contents and write updated rows dynamically
+    // Dynamic change: vehicles that became active or stopped running are completely removed!
+    targetSheet.clearContents();
+
+    if (outputRows.length > 0) {
+      targetSheet.getRange(1, 1, outputRows.length, headers.length).setValues(outputRows);
+
+      // Format Header row
+      var headerRange = targetSheet.getRange(1, 1, 1, headers.length);
+      headerRange.setFontWeight('bold');
+      headerRange.setBackground('#1e293b');
+      headerRange.setFontColor('#ffffff');
+      headerRange.setHorizontalAlignment('center');
+
+      targetSheet.setFrozenRows(1);
+    }
+
+    var syncTimestamp = Utilities.formatDate(new Date(), timeZone, "hh:mm a, dd MMM yyyy");
+    PropertiesService.getScriptProperties().setProperty('LAST_INACTIVE_RUNNING_SYNC', syncTimestamp);
+
+    Logger.log("✅ Synced " + currentDevices.length + " Inactive+Running vehicles to target sheet at " + syncTimestamp);
+
+    return {
+      success: true,
+      message: 'Successfully synced ' + currentDevices.length + ' Inactive+Running vehicles to "' + targetTabName + '"!',
+      count: currentDevices.length,
+      timestamp: syncTimestamp,
+      sheetUrl: targetSS.getUrl()
+    };
+  } catch (err) {
+    Logger.log("❌ Error in syncInactiveRunningSheet: " + err.toString());
+    return { success: false, error: err.toString() };
+  }
+}
+
+/**
+ * ============================================================================
+ * 1-WEEK CONTINUOUS INACTIVE + RUNNING DEFECT DETECTION ENGINE
+ * ============================================================================
+ * Analyzes the past 7 days of daily CSV reports saved in Google Drive.
+ * Identifies vehicles that have been CONTINUOUSLY Inactive on Roadcast while RUNNING.
+ * Calculates persistence rate, consecutive streak, first/last seen date, and severity.
+ * ============================================================================
+ */
+function getWeeklyContinuousInactiveRunning(params) {
+  try {
+    params = params || {};
+    var folderId = VTS_CONFIG.DAILY_REPORTS_FOLDER_ID || '1WqrIXW7abqYzCug_xz4LbzVag2plBDnB';
+    var folder = DriveApp.getFolderById(folderId);
+    var timeZone = Session.getScriptTimeZone() || 'Asia/Kolkata';
+
+    // 1. Collect all daily report CSV files from Drive folder
+    var folderFiles = folder.getFiles();
+    var dailyFiles = [];
+    while (folderFiles.hasNext()) {
+      var f = folderFiles.next();
+      var fName = f.getName();
+      if (fName.indexOf('VTS_Report_') === 0 && fName.indexOf('.csv') !== -1) {
+        dailyFiles.push({
+          file: f,
+          name: fName,
+          updated: f.getLastUpdated()
+        });
+      }
+    }
+
+    // Sort by file updated date descending (most recent first)
+    dailyFiles.sort(function(a, b) {
+      return b.updated.getTime() - a.updated.getTime();
+    });
+
+    // Take up to the latest 7 days of reports (1 week)
+    var targetFiles = dailyFiles.slice(0, 7);
+    if (targetFiles.length === 0) {
+      return {
+        success: true,
+        message: 'No daily report CSV files found in Drive folder.',
+        totalDaysEvaluated: 0,
+        evaluatedDates: [],
+        chronicDefaulters: [],
+        allAnomalies: []
+      };
+    }
+
+    var evaluatedDates = [];
+    var vehicleStats = {}; // uniqueid -> { ...details, dates: [], count: 0 }
+
+    for (var fIdx = 0; fIdx < targetFiles.length; fIdx++) {
+      var item = targetFiles[fIdx];
+      var rawCsv = item.file.getBlob().getDataAsString();
+      if (!rawCsv || !rawCsv.trim()) continue;
+
+      var parsed = Utilities.parseCsv(rawCsv);
+      if (parsed.length <= 1) continue;
+
+      // Extract date label from filename e.g. "VTS_Report_6_Oct_2026.csv" -> "6_Oct_2026"
+      var dateLabel = item.name.replace(/^VTS_Report_/, '').replace(/\.csv$/, '').replace(/_/g, ' ');
+      evaluatedDates.push(dateLabel);
+
+      var headers = parsed[0].map(function(h) { return String(h).trim().toLowerCase(); });
+      var idxName = findColIndex(headers, ['name', 'vehicle']);
+      var idxImei = findColIndex(headers, ['uniqueid', 'imei']);
+      var idxPhone = findColIndex(headers, ['phone', 'sim', 'mobile', 'sim no']);
+      var idxCity = findColIndex(headers, ['city(user)', 'city']);
+      var idxRoadcast = findColIndex(headers, ['status on roadcast', 'roadcast status', 'vts status']);
+      var idxFinal = findColIndex(headers, ['final status', 'vehicle status']);
+      var idxRemark = findColIndex(headers, ['remark', 'inactive-running remark']);
+      var idxLastUpdate = findColIndex(headers, ['last update', 'last roadcast update']);
+
+      if (idxName === -1) idxName = 1;
+      if (idxImei === -1) idxImei = 2;
+      if (idxPhone === -1) idxPhone = 3;
+      if (idxCity === -1) idxCity = 4;
+      if (idxRoadcast === -1) idxRoadcast = 5;
+      if (idxFinal === -1) idxFinal = 7;
+
+      for (var r = 1; r < parsed.length; r++) {
+        var row = parsed[r];
+        if (!row || row.length === 0) continue;
+
+        var roadcastVal = String(row[idxRoadcast] || '').trim().toLowerCase();
+        var finalVal = String(row[idxFinal] || '').trim().toUpperCase();
+
+        if (roadcastVal === 'inactive' && finalVal === 'RUNNING') {
+          var imei = normalizeUniqueid(row[idxImei]);
+          if (!imei) continue;
+
+          if (!vehicleStats[imei]) {
+            vehicleStats[imei] = {
+              uniqueid: imei,
+              name: String(row[idxName] || '').trim(),
+              phone: normalizeUniqueid(row[idxPhone]),
+              city: String(row[idxCity] || '').trim(),
+              vtsStatus: 'Inactive',
+              vehicleStatus: 'RUNNING',
+              lastUpdate: idxLastUpdate > -1 ? String(row[idxLastUpdate] || '') : '',
+              remark: idxRemark > -1 ? String(row[idxRemark] || '') : '',
+              datesDetected: [],
+              daysInactive: 0
+            };
+          }
+
+          if (vehicleStats[imei].datesDetected.indexOf(dateLabel) === -1) {
+            vehicleStats[imei].datesDetected.push(dateLabel);
+            vehicleStats[imei].daysInactive++;
+          }
+        }
+      }
+    }
+
+    var totalDaysEvaluated = evaluatedDates.length;
+    var allAnomalies = [];
+    var chronicDefaulters = [];
+
+    // Threshold for 1-Week Chronic Defaulter: at least 5 days out of 7, or all available if < 5
+    var chronicThreshold = totalDaysEvaluated >= 5 ? 5 : Math.max(2, totalDaysEvaluated);
+
+    for (var id in vehicleStats) {
+      var v = vehicleStats[id];
+      var appearancePct = totalDaysEvaluated > 0 ? Math.round((v.daysInactive / totalDaysEvaluated) * 100) : 0;
+      var isChronic = v.daysInactive >= chronicThreshold;
+      var severity = 'MODERATE';
+      if (v.daysInactive >= Math.max(6, totalDaysEvaluated)) severity = 'CRITICAL';
+      else if (v.daysInactive >= 4) severity = 'HIGH';
+
+      var record = {
+        uniqueid: v.uniqueid,
+        name: v.name,
+        phone: v.phone,
+        city: v.city,
+        vtsStatus: v.vtsStatus,
+        vehicleStatus: v.vehicleStatus,
+        lastUpdate: v.lastUpdate,
+        remark: v.remark,
+        daysInactive: v.daysInactive,
+        totalDaysEvaluated: totalDaysEvaluated,
+        streakDisplay: v.daysInactive + ' / ' + totalDaysEvaluated + ' Days (' + appearancePct + '%)',
+        is1WeekContinuous: isChronic,
+        severity: severity,
+        datesDetected: v.datesDetected,
+        firstDetectedDate: v.datesDetected[v.datesDetected.length - 1] || '',
+        latestDetectedDate: v.datesDetected[0] || ''
+      };
+
+      allAnomalies.push(record);
+      if (isChronic) {
+        chronicDefaulters.push(record);
+      }
+    }
+
+    // Sort descending by days inactive
+    allAnomalies.sort(function(a, b) { return b.daysInactive - a.daysInactive; });
+    chronicDefaulters.sort(function(a, b) { return b.daysInactive - a.daysInactive; });
+
+    // Optional save to Drive
+    if (params.saveToDrive || params.saveReport) {
+      try {
+        var summaryRows = [
+          ['Uniqueid', 'Vehicle Name', 'Phone', 'City', 'Days Inactive / Total Days', 'Persistence %', 'Severity', 'Dates Detected', 'Remark']
+        ];
+        for (var c = 0; c < chronicDefaulters.length; c++) {
+          var ch = chronicDefaulters[c];
+          summaryRows.push([
+            "'" + ch.uniqueid,
+            ch.name,
+            "'" + ch.phone,
+            ch.city,
+            ch.daysInactive + ' / ' + totalDaysEvaluated,
+            Math.round((ch.daysInactive / totalDaysEvaluated) * 100) + '%',
+            ch.severity,
+            ch.datesDetected.join(', '),
+            ch.remark
+          ]);
+        }
+        var summaryCsv = summaryRows.map(function(r) {
+          return r.map(function(col) {
+            var s = String(col || '');
+            if (s.indexOf(',') !== -1 || s.indexOf('"') !== -1) s = '"' + s.replace(/"/g, '""') + '"';
+            return s;
+          }).join(',');
+        }).join('\r\n');
+
+        var todayStr = Utilities.formatDate(new Date(), timeZone, "d_MMM_yyyy");
+        folder.createFile("VTS_Weekly_Continuous_Defaulters_" + todayStr + ".csv", summaryCsv, MimeType.CSV);
+      } catch (saveErr) {
+        Logger.log("Weekly summary save notice: " + saveErr.toString());
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Found ' + chronicDefaulters.length + ' 1-week continuous defaulters across ' + totalDaysEvaluated + ' daily Drive reports.',
+      totalDaysEvaluated: totalDaysEvaluated,
+      evaluatedDates: evaluatedDates,
+      chronicCount: chronicDefaulters.length,
+      totalAnomaliesCount: allAnomalies.length,
+      chronicDefaulters: chronicDefaulters,
+      allAnomalies: allAnomalies
+    };
+  } catch (err) {
+    Logger.log("❌ Error in getWeeklyContinuousInactiveRunning: " + err.toString());
     return { success: false, error: err.toString() };
   }
 }
@@ -4301,7 +4666,8 @@ function onOpen() {
   try {
     var ui = SpreadsheetApp.getUi();
     ui.createMenu('🚀 VTS Tracker Hub')
-      .addItem('💾 Save/Update Today\'s Report (Smart Overwrite)', 'menuSaveTodaySnapshot')
+      .addItem('💾 Save/Update Today\'s Report (Drive Only)', 'menuSaveTodaySnapshot')
+      .addItem('🔄 Sync "VTS Inactive + running" Sheet', 'menuSyncInactiveRunning')
       .addItem('⏰ Setup Daily 4:45 PM Auto-Save Trigger', 'menuSetupDailyTrigger')
       .addSeparator()
       .addItem('🛡️ Protect Column H Formula', 'menuProtectColumnH')
@@ -4316,9 +4682,19 @@ function menuSaveTodaySnapshot() {
   var res = saveDailySheetSnapshot();
   var ui = SpreadsheetApp.getUi();
   if (res.success) {
-    ui.alert('✓ Success!', res.message + '\nFile: ' + res.fileName, ui.ButtonSet.OK);
+    ui.alert('✓ Success!', res.message + '\nFile saved in Drive: ' + res.fileName, ui.ButtonSet.OK);
   } else {
     ui.alert('❌ Error', 'Could not save file: ' + res.error, ui.ButtonSet.OK);
+  }
+}
+
+function menuSyncInactiveRunning() {
+  var res = syncInactiveRunningSheet();
+  var ui = SpreadsheetApp.getUi();
+  if (res.success) {
+    ui.alert('✓ Success!', res.message, ui.ButtonSet.OK);
+  } else {
+    ui.alert('❌ Error', 'Could not sync sheet: ' + res.error, ui.ButtonSet.OK);
   }
 }
 

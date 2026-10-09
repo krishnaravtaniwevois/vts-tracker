@@ -2179,5 +2179,57 @@ export async function setupDailySaveTriggerApi() {
   }
 }
 
+/**
+ * Trigger Real-time Dynamic Sync of "VTS Inactive + running Vehicle" Google Sheet
+ * Spreadsheet ID: 10qSJ2aVjkpMeyJVP3MSRif2YFbcJ0fsYKw6UdCo2Rcc
+ */
+export async function syncInactiveRunningSheetApi() {
+  const apiUrl = getStoredApiUrl();
+  if (!apiUrl) {
+    throw new Error('Google Apps Script URL is not configured. Please set it in Settings.');
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'syncInactiveRunningSheet'
+      })
+    });
+    const result = await response.json();
+    return result;
+  } catch (err) {
+    console.error('Error syncing inactive running sheet:', err);
+    throw err;
+  }
+}
+
+/**
+ * Scan Past 7 Days (1 Week) of Drive Daily Reports and detect Continuous Chronic Defaulters
+ */
+export async function getWeeklyContinuousInactiveRunningApi(params = {}) {
+  const apiUrl = getStoredApiUrl();
+  if (!apiUrl) {
+    throw new Error('Google Apps Script URL is not configured. Please set it in Settings.');
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'getWeeklyContinuousInactiveRunning',
+        ...params
+      })
+    });
+    const result = await response.json();
+    return result;
+  } catch (err) {
+    console.error('Error fetching weekly continuous inactive running devices:', err);
+    throw err;
+  }
+}
+
 
 
