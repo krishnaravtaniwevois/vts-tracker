@@ -611,6 +611,7 @@ export function App() {
                   requests={requests}
                   returnRequests={returnRequests}
                   renewalLogs={renewalLogs}
+                  currentUser={currentUser}
                 />
               </TabErrorBoundary>
             </div>

@@ -9,7 +9,8 @@ export function VehicleHistoryView({
   devices = [],
   requests = [],
   returnRequests = [],
-  renewalLogs = []
+  renewalLogs = [],
+  currentUser = null
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchField, setSearchField] = useState('all'); // 'all', 'city', 'vehicle', 'imei', 'remark'
@@ -300,6 +301,7 @@ export function VehicleHistoryView({
     setCurrentPage(1);
 
     try {
+      const userEmail = currentUser?.email || '';
       const data = await fetchVehicleHistory({
         searchTerm: term,
         searchField: field,
@@ -307,8 +309,23 @@ export function VehicleHistoryView({
         cities: citiesList,
         exactMatch,
         startDate: historyStart,
-        endDate: historyEnd
+        endDate: historyEnd,
+        userEmail: userEmail
       });
+
+      // Strict role-based security: If Manager, filter records exclusively to assigned cities
+      if (currentUser && currentUser.role === 'Manager') {
+        const allowedCities = (currentUser.assignedCities || []).map((c) => String(c).toLowerCase().trim());
+        if (allowedCities.length > 0 && data && data.results) {
+          const filteredResults = data.results.filter((r) => {
+            const rCity = String(r.city || '').toLowerCase().trim();
+            return allowedCities.includes(rCity);
+          });
+          data.results = filteredResults;
+          data.totalRecords = filteredResults.length;
+        }
+      }
+
       cacheRef.current[cacheKey] = data;
       setHistoryData(data);
     } catch (err) {

@@ -16,12 +16,21 @@ export function Dashboard({
 }) {
   // Aggregate fleet metrics
   const total = devices.length;
-  const activeCount = devices.filter(d => d.status === 'Active').length;
-  const inactiveCount = devices.filter(d => d.status === 'Inactive').length;
-  const rechargeSoonCount = devices.filter(d => d.status === 'Recharge Soon').length;
-  const expiredCount = devices.filter(d => d.status === 'Expired').length;
-  const damagedCount = devices.filter(d => d.status === 'Damaged' || d.isDamaged).length;
-  const otherCount = Math.max(0, total - (activeCount + inactiveCount + rechargeSoonCount + expiredCount + damagedCount));
+  const activeCount = devices.filter(d => {
+    const rc = String(d.roadcastStatus || d.status || '').toLowerCase();
+    return rc === 'active';
+  }).length;
+  const inactiveCount = devices.filter(d => {
+    const rc = String(d.roadcastStatus || d.status || '').toLowerCase();
+    return rc === 'inactive';
+  }).length;
+  const rechargeSoonCount = devices.filter(d => (d.rechargeStatus || d.status) === 'Recharge Soon').length;
+  const expiredCount = devices.filter(d => (d.rechargeStatus || d.status) === 'Expired').length;
+  const damagedCount = devices.filter(d => {
+    const fs = String(d.finalStatus || '').toLowerCase();
+    return fs === 'damaged' || d.status === 'Damaged' || d.isDamaged;
+  }).length;
+  const otherCount = Math.max(0, total - (activeCount + inactiveCount));
 
   const uptimePercent = total > 0 ? ((activeCount / total) * 100).toFixed(1) : '100';
 
@@ -29,7 +38,7 @@ export function Dashboard({
   const activePct = total > 0 ? ((activeCount / total) * 100) : 0;
   const inactivePct = total > 0 ? ((inactiveCount / total) * 100) : 0;
   const expiredPct = total > 0 ? (((expiredCount + rechargeSoonCount) / total) * 100) : 0;
-  const otherPct = total > 0 ? (((damagedCount + otherCount) / total) * 100) : 0;
+  const otherPct = total > 0 ? ((damagedCount / total) * 100) : 0;
 
   // 4 Top KPI Cards
   const kpiStats = [
@@ -94,7 +103,7 @@ export function Dashboard({
 
   // Priority Operational Radar (Expired or Due Soon)
   const urgentDevices = devices
-    .filter(d => d.status === 'Expired' || d.status === 'Recharge Soon')
+    .filter(d => (d.rechargeStatus || d.status) === 'Expired' || (d.rechargeStatus || d.status) === 'Recharge Soon')
     .sort((a, b) => (a.remainingDays ?? 999) - (b.remainingDays ?? 999))
     .slice(0, 4);
 
@@ -416,7 +425,7 @@ export function Dashboard({
                 onClick={() => onSelectDevice(d)}
                 title="Click to view device details & edit history"
               >
-                <span className={`radar-dot ${d.status === 'Expired' ? 'red' : 'amber'}`} />
+                <span className={`radar-dot ${(d.rechargeStatus || d.status) === 'Expired' ? 'red' : 'amber'}`} />
                 <div className="radar-item-info">
                   <strong>
                     {d.vehicle || 'Unknown Vehicle'}{' '}

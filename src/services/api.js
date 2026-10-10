@@ -144,16 +144,19 @@ export async function fetchAllFleetData() {
       const remainingDays = calculateDaysRemaining(d.licenseEnd);
       const computedRechargeStatus = getRechargeStatus(remainingDays);
       const override = d.statusOverride || d.override || '';
+      const rawRoadcast = String(d.roadcastStatus || d['Status on Roadcast'] || d.status || '').trim();
+      const roadcastStatusClean = rawRoadcast.toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
 
       return {
         ...d,
+        roadcastStatus: roadcastStatusClean,
         licenseEnd: formatDisplayDate(d.licenseEnd),
         remainingDays,
         rechargeStatus: computedRechargeStatus,
-        status: computedRechargeStatus,
+        status: roadcastStatusClean,
         statusOverride: override,
         finalStatus: cleanFinalStatus(d.finalStatus) || d.finalStatus || '',
-        displayStatus: override || cleanFinalStatus(d.finalStatus) || (String(d.roadcastStatus || '').toLowerCase() === 'inactive' ? 'Inactive' : '—'),
+        displayStatus: override || cleanFinalStatus(d.finalStatus) || (roadcastStatusClean.toLowerCase() === 'inactive' ? 'Inactive' : '—'),
         renewalDecision: d.renewalDecision || 'Pending',
         renewalRemark: d.renewalRemark || '',
         inactiveRunningRemark: d.inactiveRunningRemark || ''
@@ -211,18 +214,20 @@ export async function fetchAllFleetData() {
         const remainingDays = d.remainingDays !== undefined ? d.remainingDays : calculateDaysRemaining(rawLicenseEnd);
         const computedRechargeStatus = getRechargeStatus(remainingDays);
         const override = d.statusOverride || d.override || '';
-
         const cleanedFinalStatus = cleanFinalStatus(d.finalStatus);
+        const rawRoadcast = String(d.roadcastStatus || d['Status on Roadcast'] || d.status || '').trim();
+        const roadcastStatusClean = rawRoadcast.toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
 
         return {
           ...d,
+          roadcastStatus: roadcastStatusClean,
           licenseEnd: rawLicenseEnd ? formatDisplayDate(rawLicenseEnd) : '',
           remainingDays,
           rechargeStatus: computedRechargeStatus,
-          status: computedRechargeStatus,
+          status: roadcastStatusClean,
           statusOverride: override,
           finalStatus: cleanedFinalStatus || d.finalStatus || '',
-          displayStatus: override || cleanedFinalStatus || (String(d.roadcastStatus || '').toLowerCase() === 'inactive' ? 'Inactive' : '—'),
+          displayStatus: override || cleanedFinalStatus || (roadcastStatusClean.toLowerCase() === 'inactive' ? 'Inactive' : '—'),
           renewalDecision: d.renewalDecision || d.decision || 'Pending',
           renewalRemark: d.renewalRemark || d.remark || '',
           inactiveRunningRemark: d.inactiveRunningRemark || ''
@@ -1468,7 +1473,8 @@ export async function fetchVehicleHistory(params) {
     statusFilter: params.statusFilter || 'all',
     exactMatch: params.exactMatch ? 'true' : 'false',
     startDate: params.startDate || '',
-    endDate: params.endDate || ''
+    endDate: params.endDate || '',
+    userEmail: params.userEmail || ''
   });
 
   const url = apiUrl.includes('?') ? `${apiUrl}&${queryParams.toString()}` : `${apiUrl}?${queryParams.toString()}`;

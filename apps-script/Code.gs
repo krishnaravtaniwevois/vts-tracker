@@ -3264,6 +3264,29 @@ function searchVehicleHistoryApi(params) {
     selectedCities = selectedCity.split(/[,;\n|]+/).map(function(c) { return c.trim().toLowerCase(); }).filter(Boolean);
   }
 
+  // Role-based scoping: If a Manager makes the request, strictly restrict to their assigned cities
+  var userEmail = (params.userEmail || '').toString().trim().toLowerCase();
+  var managerCities = null;
+  if (userEmail) {
+    var usersList = getUsersList();
+    for (var u = 0; u < usersList.length; u++) {
+      if (usersList[u].email.toLowerCase().trim() === userEmail) {
+        if (usersList[u].role === 'Manager') {
+          managerCities = usersList[u].assignedCities.map(function(c) { return c.toLowerCase().trim(); });
+        }
+        break;
+      }
+    }
+  }
+
+  if (managerCities && managerCities.length > 0) {
+    if (selectedCities.length === 0) {
+      selectedCities = managerCities;
+    } else {
+      selectedCities = selectedCities.filter(function(c) { return managerCities.indexOf(c) !== -1; });
+    }
+  }
+
   if (!rawSearchTerm && selectedCities.length === 0) {
     throw new Error("Please enter a Search Term or select a City.");
   }
@@ -3384,6 +3407,12 @@ function searchVehicleHistoryApi(params) {
             if (selectedCities.length > 0) {
               var matchCityCell = selectedCities.some(function(c) { return lowerCity.indexOf(c) !== -1; });
               if (!matchCityCell) continue;
+            }
+
+            // Manager Role Security Check
+            if (managerCities && managerCities.length > 0) {
+              var managerCityMatch = managerCities.some(function(c) { return lowerCity.indexOf(c) !== -1; });
+              if (!managerCityMatch) continue;
             }
 
             // 2. STATUS FILTER CHECK
