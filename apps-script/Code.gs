@@ -25,9 +25,15 @@ var VTS_CONFIG = {
   DAILY_REPORTS_FOLDER_ID: '1WqrIXW7abqYzCug_xz4LbzVag2plBDnB',
   INACTIVE_RUNNING_SHEET_ID: '10qSJ2aVjkpMeyJVP3MSRif2YFbcJ0fsYKw6UdCo2Rcc',
   INACTIVE_RUNNING_TAB_NAME: 'VTS Inactive + running Vehicle',
+  LOGGER_TAB_NAME: 'VTS Data',
+  VENDOR_VEHICLES_TAB_NAME: 'Vendor Vehicles',
+  EXCLUDED_LOGGER_CITIES: ['pali', 'goa', 'uniara'],
   EXPIRY_ALERT_DAYS: 15,
   SHARED_SECRET_TOKEN: '' // Optional token security
 };
+
+// Cities excluded from "VTS Data" logger
+var EXCLUDED_CITIES = ['pali', 'goa', 'uniara'];
 
 function authTest() {
   Logger.log("✅ Apps Script Engine is Healthy! User: " + Session.getActiveUser().getEmail());
@@ -87,6 +93,9 @@ function doGet(e) {
     else if (action === 'setupDailySaveTrigger') result = setupDaily445Trigger();
     else if (action === 'syncInactiveRunningSheet') result = syncInactiveRunningSheet();
     else if (action === 'getWeeklyContinuousInactiveRunning') result = getWeeklyContinuousInactiveRunning(e ? e.parameter : {});
+    else if (action === 'logInactiveRunningVTS') result = logInactiveRunningVTS();
+    else if (action === 'reformatLogSheetNow') result = reformatLogSheetNow();
+    else if (action === 'createDaily1035Trigger') result = createDailyTrigger();
     else result = { status: 'error', message: 'Unknown action: ' + action };
 
     return ContentService.createTextOutput(JSON.stringify({
@@ -127,7 +136,8 @@ function doPost(e) {
       'applyBatchRenewals', 'batchUpdateLicenseDates', 'finalizeRenewalSession', 'saveUser',
       'deleteUser', 'submitRequirementRequest', 'submitReturnRequest', 'refreshFinalStatus',
       'protectColumnH', 'updateStatusOverride', 'updateInactiveRunningRemark', 'setActiveRenewalCycleTab',
-      'setRenewalSheetUrl', 'saveDailySnapshot', 'setupDailySaveTrigger', 'syncInactiveRunningSheet'
+      'setRenewalSheetUrl', 'saveDailySnapshot', 'setupDailySaveTrigger', 'syncInactiveRunningSheet',
+      'logInactiveRunningVTS', 'reformatLogSheetNow', 'createDaily1035Trigger'
     ];
 
     var executeAction = function() {
@@ -163,6 +173,9 @@ function doPost(e) {
       if (action === 'setupDailySaveTrigger') return setupDaily445Trigger();
       if (action === 'syncInactiveRunningSheet') return syncInactiveRunningSheet();
       if (action === 'getWeeklyContinuousInactiveRunning') return getWeeklyContinuousInactiveRunning(payload);
+      if (action === 'logInactiveRunningVTS') return logInactiveRunningVTS();
+      if (action === 'reformatLogSheetNow') return reformatLogSheetNow();
+      if (action === 'createDaily1035Trigger') return createDailyTrigger();
       return { success: false, message: 'Invalid action: ' + action };
     };
 
@@ -4241,7 +4254,7 @@ function saveDailySheetSnapshot(payload) {
       var dateTabRegex = /^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/i;
       for (var s = 0; s < allSheets.length; s++) {
         var shName = allSheets[s].getName();
-        if (dateTabRegex.test(shName) && shName !== '900' && shName !== 'Sitewise Vehicle Record') {
+        if (dateTabRegex.test(shName) && shName !== '900' && shName !== 'Sitewise Vehicle Record' && shName !== 'VTS Data' && shName !== 'Vendor Vehicles' && shName !== 'Users' && shName !== 'Search') {
           Logger.log("🗑️ Cleaned up accidental date tab: " + shName);
           ss.deleteSheet(allSheets[s]);
         }
@@ -4258,6 +4271,14 @@ function saveDailySheetSnapshot(payload) {
       Logger.log("Inactive-running sync notice: " + syncErr.toString());
     }
 
+    // 7. VTS DATA LOGGER: Automatically log today's Inactive+Running records to "VTS Data" tab
+    var vtsDataResult = null;
+    try {
+      vtsDataResult = logInactiveRunningVTS();
+    } catch (logErr) {
+      Logger.log("VTS Data auto-log notice: " + logErr.toString());
+    }
+
     var timeStr = Utilities.formatDate(today, timeZone, "hh:mm a, dd MMM yyyy");
     PropertiesService.getScriptProperties().setProperty('LAST_DAILY_SAVE_TIMESTAMP', timeStr);
     PropertiesService.getScriptProperties().setProperty('LAST_DAILY_SAVE_FILE_URL', newFile.getUrl());
@@ -4271,6 +4292,7 @@ function saveDailySheetSnapshot(payload) {
       fileUrl: newFile.getUrl(),
       replacedCount: filesToTrash.length,
       inactiveRunningSync: syncResult,
+      vtsDataLog: vtsDataResult,
       timestamp: timeStr,
       totalRows: data.length
     };
@@ -4665,13 +4687,28 @@ function setupDaily445Trigger() {
 function onOpen() {
   try {
     var ui = SpreadsheetApp.getUi();
+
+    // 1. Primary Hub Menu
     ui.createMenu('🚀 VTS Tracker Hub')
       .addItem('💾 Save/Update Today\'s Report (Drive Only)', 'menuSaveTodaySnapshot')
       .addItem('🔄 Sync "VTS Inactive + running" Sheet', 'menuSyncInactiveRunning')
+      .addItem('📋 Log Inactive + Running to "VTS Data" Now', 'menuLogInactiveRunningVTS')
+      .addItem('🎨 Reformat "VTS Data" Sheet', 'reformatLogSheetNow')
+      .addSeparator()
+      .addItem('⏰ Setup Daily 10:35 AM "VTS Data" Trigger', 'createDailyTrigger')
       .addItem('⏰ Setup Daily 4:45 PM Auto-Save Trigger', 'menuSetupDailyTrigger')
       .addSeparator()
       .addItem('🛡️ Protect Column H Formula', 'menuProtectColumnH')
       .addItem('🔍 Search Vehicle History', 'searchVehicleHistory')
+      .addItem('🧹 Fix Old Text Dates in "VTS Data"', 'fixOldTextDates')
+      .addToUi();
+
+    // 2. VTS Tools Menu (Exact shortcut menu for daily 1-click check)
+    ui.createMenu('VTS Tools')
+      .addItem('Check Inactive + Running Now', 'menuLogInactiveRunningVTS')
+      .addItem('Reformat VTS Data Sheet Now', 'reformatLogSheetNow')
+      .addItem('Setup Daily 10:35 AM Trigger', 'createDailyTrigger')
+      .addItem('Fix Old Text Dates in VTS Data', 'fixOldTextDates')
       .addToUi();
   } catch (e) {
     Logger.log("Menu creation skipped (not container-bound): " + e.toString());
@@ -4711,4 +4748,346 @@ function menuProtectColumnH() {
     ensureColumnHProtected(sheet);
     SpreadsheetApp.getUi().alert('🛡️ Protected', 'Column H formulas have been locked and protected against accidental edits.', SpreadsheetApp.getUi().ButtonSet.OK);
   }
+}
+
+function menuLogInactiveRunningVTS() {
+  var res = logInactiveRunningVTS();
+  var ui = SpreadsheetApp.getUi();
+  if (res.success) {
+    ui.alert('✓ Success!', res.message, ui.ButtonSet.OK);
+  } else {
+    ui.alert('❌ Error', 'Could not log to VTS Data: ' + res.error, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * ============================================================================
+ * DAILY INACTIVE + RUNNING VTS LOGGER ("VTS Data" Tab)
+ * ============================================================================
+ * Source sheet: "900"
+ *   B = Vehicle Name | C = Uniqueid | E = City
+ *   F = Status on Roadcast (Active/Inactive)
+ *   H = Final Status (RUNNING/AVAILABLE/...)
+ *
+ * Output sheet: "VTS Data"
+ *   Columns: Date | City | Vehicle Name | Last Update | Remark
+ *   (Last Update aur Remark seedhe source sheet "900" ke columns G aur J se copy hote hain.)
+ *
+ * Logic: Har row jisme (F = "Inactive") AUR (H = "Running") dono ek saath hain,
+ * usko aaj ki date ke saath naye sheet mein daal deta hai.
+ *
+ * EXCLUSIONS:
+ * 1. Cities Pali, Goa aur Uniara ka data kabhi log nahi hota — inhe poori tarah skip kiya jata hai.
+ * 2. Vendor-managed vehicles skip ho jate hain ("Vendor Vehicles" tab, col A, row 2+).
+ *
+ * Duplicate-proof: har run pe pehle aaj ki date ka purana data hata kar
+ * fresh dobara daalta hai, isliye chahe din mein kitni baar bhi chalao,
+ * duplicate rows nahi banti.
+ * ============================================================================
+ */
+
+function logInactiveRunningVTS() {
+  try {
+    var ss = safeOpenSpreadsheet(VTS_CONFIG.MASTER_SHEET);
+    if (!ss) {
+      Logger.log('Spreadsheet nahi mili.');
+      return { success: false, error: 'Spreadsheet not found' };
+    }
+    var srcSheet = ss.getSheetByName(VTS_CONFIG.MASTER_TAB_NAME || '900');
+    if (!srcSheet) {
+      Logger.log('Sheet "900" nahi mili. Sheet ka naam check karo.');
+      return { success: false, error: 'Sheet "900" not found' };
+    }
+
+    var logSheetName = VTS_CONFIG.LOGGER_TAB_NAME || 'VTS Data';
+    var logSheet = ss.getSheetByName(logSheetName);
+    if (!logSheet) {
+      logSheet = ss.insertSheet(logSheetName);
+    }
+    ensureHeaderAndFormatting(logSheet);
+
+    var lastRow = srcSheet.getLastRow();
+    if (lastRow < 2) return { success: true, count: 0, message: 'No data in sheet 900' };
+
+    // A:J columns nikal lo (Sr, Name, Uniqueid, Phone, City, Status on Roadcast,
+    // Last update, Final Status, VTS Type, Remark)
+    var data = srcSheet.getRange(2, 1, lastRow - 1, 10).getValues();
+
+    var vendorVehicles = getVendorVehicleSet(ss); // Set of vendor-managed vehicle names (uppercased)
+
+    var now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // time-part hata diya
+    var rowsToAdd = [];
+
+    data.forEach(function (row) {
+      var name = row[1];        // B - Vehicle Name
+      var city = row[4];        // E - City
+      var statusRoadcast = (row[5] || '').toString().trim().toLowerCase();  // F
+      var lastUpdate = row[6];  // G - Last update
+      var finalStatus = (row[7] || '').toString().trim().toLowerCase();     // H
+      var remark = row[9];      // J - Remark
+
+      if (!name) return; // blank rows skip
+
+      var cityLower = (city || '').toString().trim().toLowerCase();
+      if (EXCLUDED_CITIES.indexOf(cityLower) !== -1) return; // Pali/Goa/Uniara skip
+
+      var nameKey = name.toString().trim().toUpperCase();
+      if (vendorVehicles.has(nameKey)) return; // vendor-managed vehicle skip
+
+      var isInactive = statusRoadcast === 'inactive';
+      var isRunning = finalStatus === 'running';
+
+      if (isInactive && isRunning) {
+        rowsToAdd.push([today, city, name, lastUpdate, remark]);
+      }
+    });
+
+    // Aaj ka purana data hata do (agar pehle bhi chal chuka ho to duplicate na bane)
+    removeRowsForDate(logSheet, today);
+
+    if (rowsToAdd.length > 0) {
+      var startRow = logSheet.getLastRow() + 1;
+      logSheet.getRange(startRow, 1, rowsToAdd.length, 5).setValues(rowsToAdd);
+      logSheet.getRange(startRow, 1, rowsToAdd.length, 1).setNumberFormat('dd mmmm yyyy');
+      logSheet.getRange(startRow, 4, rowsToAdd.length, 1).setNumberFormat('d mmm yyyy'); // Last Update: 4 Apr 2026 style
+      applyRowColors(logSheet); // fresh rows ke liye bhi clean colour laga do
+    }
+
+    var tz = ss.getSpreadsheetTimeZone() || 'Asia/Kolkata';
+    var todayFormatted = Utilities.formatDate(today, tz, 'dd MMMM yyyy');
+    Logger.log(rowsToAdd.length + ' rows added for ' + todayFormatted);
+    return {
+      success: true,
+      count: rowsToAdd.length,
+      message: rowsToAdd.length + ' rows logged to "VTS Data" for ' + todayFormatted + ' (Pali, Goa, Uniara & Vendor Vehicles excluded)'
+    };
+  } catch (err) {
+    Logger.log('❌ Error in logInactiveRunningVTS: ' + err.toString());
+    return { success: false, error: err.toString() };
+  }
+}
+
+/**
+ * "Vendor Vehicles" tab se vehicle names padh kar ek uppercase Set banata hai.
+ */
+function getVendorVehicleSet(ss) {
+  var set = new Set();
+  var vendorSheetName = VTS_CONFIG.VENDOR_VEHICLES_TAB_NAME || 'Vendor Vehicles';
+  var vendorSheet = ss.getSheetByName(vendorSheetName);
+  if (!vendorSheet) return set;
+
+  var lastRow = vendorSheet.getLastRow();
+  if (lastRow < 2) return set;
+
+  var values = vendorSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  values.forEach(function (r) {
+    var v = r[0];
+    if (v && v.toString().trim() !== '') {
+      set.add(v.toString().trim().toUpperCase());
+    }
+  });
+  return set;
+}
+
+/**
+ * Log sheet ka pura purana data hata deta hai, header aur formatting wapas se sahi kar deta hai.
+ */
+function clearLogSheet() {
+  var ss = safeOpenSpreadsheet(VTS_CONFIG.MASTER_SHEET);
+  var logSheet = ss.getSheetByName(VTS_CONFIG.LOGGER_TAB_NAME || 'VTS Data');
+  if (!logSheet) return { success: false, error: 'VTS Data sheet not found' };
+
+  var lastRow = logSheet.getLastRow();
+  if (lastRow > 1) {
+    logSheet.getRange(2, 1, lastRow - 1, 5).clearContent();
+  }
+  ensureHeaderAndFormatting(logSheet);
+  try { SpreadsheetApp.getUi().alert('Header and formatting reset.'); } catch (e) {}
+  return { success: true, message: 'Cleared log sheet and reset formatting.' };
+}
+
+/**
+ * Poori VTS Data sheet ko ek jaisi, consistent formatting de deta hai.
+ */
+function reformatLogSheetNow() {
+  var ss = safeOpenSpreadsheet(VTS_CONFIG.MASTER_SHEET);
+  var sheet = ss.getSheetByName(VTS_CONFIG.LOGGER_TAB_NAME || 'VTS Data');
+  if (!sheet) {
+    try { SpreadsheetApp.getUi().alert('VTS Data sheet nahi mili.'); } catch (e) {}
+    return { success: false, error: 'VTS Data sheet nahi mili.' };
+  }
+  ensureHeaderAndFormatting(sheet);
+  try { SpreadsheetApp.getUi().alert('formatting consistent Done.'); } catch (e) {}
+  return { success: true, message: 'Formatting consistent Done.' };
+}
+
+/**
+ * Header hamesha hai ya nahi check karta hai, aur sheet ko simple, hamesha-readable formatting deta hai.
+ */
+function ensureHeaderAndFormatting(sheet) {
+  var firstCell = sheet.getRange('A1').getValue();
+  if (firstCell !== 'Date') {
+    sheet.getRange(1, 1, 1, 5).setValues([['Date', 'City', 'Vehicle Name', 'Last Update', 'Remark']]);
+  }
+
+  var headerRange = sheet.getRange(1, 1, 1, 5);
+  headerRange
+    .setFontWeight('bold')
+    .setFontColor('#ffffff')
+    .setBackground('#434343')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setFontSize(11);
+
+  sheet.setFrozenRows(1);
+  sheet.setRowHeight(1, 28);
+
+  sheet.setColumnWidth(1, 130); // Date
+  sheet.setColumnWidth(2, 150); // City
+  sheet.setColumnWidth(3, 180); // Vehicle Name
+  sheet.setColumnWidth(4, 150); // Last Update
+  sheet.setColumnWidth(5, 200); // Remark
+
+  var lastRow = Math.max(sheet.getLastRow(), 1);
+  var fullRange = sheet.getRange(1, 1, lastRow, 5);
+  fullRange.setBorder(true, true, true, true, true, true, '#d9d9d9', SpreadsheetApp.BorderStyle.SOLID);
+
+  if (lastRow > 1) {
+    var dataRange = sheet.getRange(2, 1, lastRow - 1, 5);
+    dataRange.setFontColor('#000000');   // hamesha black text
+    sheet.getRange(2, 1, lastRow - 1, 3).setHorizontalAlignment('center'); // Date, City, Vehicle Name center
+    sheet.getRange(2, 4, lastRow - 1, 2).setHorizontalAlignment('left');  // Last Update, Remark left
+    sheet.getRange(2, 1, lastRow - 1, 1).setNumberFormat('dd mmmm yyyy');
+    sheet.getRange(2, 4, lastRow - 1, 1).setNumberFormat('d mmm yyyy'); // Last Update: 4 Apr 2026 style
+    applyRowColors(sheet);
+  }
+}
+
+/**
+ * Sirf naye date-block ka Date cell (column A) bright cyan highlight karta hai (#00e5ff).
+ */
+function applyRowColors(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  var n = lastRow - 1;
+
+  var tz = sheet.getParent().getSpreadsheetTimeZone() || 'Asia/Kolkata';
+  var dateValues = sheet.getRange(2, 1, n, 1).getValues();
+
+  var bgColors = [];       // column A only
+  var fontWeights = [];    // column A only
+  var prevKey = null;
+
+  for (var r = 0; r < n; r++) {
+    var v = dateValues[r][0];
+    var key = v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : String(v);
+    var isNewDate = key !== prevKey;
+    prevKey = key;
+
+    bgColors.push([isNewDate ? '#00e5ff' : '#ffffff']);
+    fontWeights.push([isNewDate ? 'bold' : 'normal']);
+  }
+
+  // Column A: cyan highlight + bold on new-date rows, plain otherwise
+  sheet.getRange(2, 1, n, 1).setBackgrounds(bgColors).setFontWeights(fontWeights);
+  // Columns B-E: always plain white, single batch call
+  sheet.getRange(2, 2, n, 4).setBackground('#ffffff');
+}
+
+/**
+ * Log sheet mein di gayi date wali saari purani rows delete kar deta hai (idempotent duplicate-proof).
+ */
+function removeRowsForDate(sheet, dateToRemove) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  var tz = sheet.getParent().getSpreadsheetTimeZone() || 'Asia/Kolkata';
+  var targetStr = Utilities.formatDate(dateToRemove, tz, 'yyyy-MM-dd');
+
+  var values = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var matchRows = []; // actual sheet row numbers (1-indexed) that match
+  for (var i = 0; i < values.length; i++) {
+    var v = values[i][0];
+    if (v instanceof Date) {
+      var vStr = Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+      if (vStr === targetStr) {
+        matchRows.push(i + 2);
+      }
+    }
+  }
+  if (matchRows.length === 0) return;
+
+  var ranges = [];
+  var rangeStart = matchRows[0];
+  var rangeLen = 1;
+  for (var k = 1; k < matchRows.length; k++) {
+    if (matchRows[k] === rangeStart + rangeLen) {
+      rangeLen++;
+    } else {
+      ranges.push([rangeStart, rangeLen]);
+      rangeStart = matchRows[k];
+      rangeLen = 1;
+    }
+  }
+  ranges.push([rangeStart, rangeLen]);
+
+  for (var j = ranges.length - 1; j >= 0; j--) {
+    sheet.deleteRows(ranges[j][0], ranges[j][1]);
+  }
+}
+
+/**
+ * ONE-TIME FIX: agar VTS Data mein purani rows ka Date column TEXT format mein hai to fix karta hai.
+ */
+function fixOldTextDates() {
+  var ss = safeOpenSpreadsheet(VTS_CONFIG.MASTER_SHEET);
+  var sheet = ss.getSheetByName(VTS_CONFIG.LOGGER_TAB_NAME || 'VTS Data');
+  if (!sheet) return { success: false, error: 'VTS Data sheet not found' };
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { success: true, count: 0 };
+
+  var range = sheet.getRange(2, 1, lastRow - 1, 1);
+  var values = range.getValues();
+  var fixedCount = 0;
+
+  for (var i = 0; i < values.length; i++) {
+    var v = values[i][0];
+    if (typeof v === 'string' && v.trim() !== '') {
+      var parts = v.split('-');
+      if (parts.length === 3) {
+        var d = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+        values[i][0] = d;
+        fixedCount++;
+      }
+    }
+  }
+
+  range.setValues(values);
+  range.setNumberFormat('dd mmmm yyyy');
+  try { SpreadsheetApp.getUi().alert(fixedCount + ' purani rows ki date fix ho gayi.'); } catch (e) {}
+  return { success: true, fixedCount: fixedCount, message: fixedCount + ' rows fixed.' };
+}
+
+/**
+ * Daily 10:35 AM trigger
+ */
+function createDailyTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function (t) {
+    if (t.getHandlerFunction() === 'logInactiveRunningVTS') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+
+  ScriptApp.newTrigger('logInactiveRunningVTS')
+    .timeBased()
+    .atHour(10)
+    .nearMinute(35)
+    .everyDays(1)
+    .create();
+
+  Logger.log('Daily trigger set ho gaya — roz ~10:35 AM par chalega.');
+  return { success: true, message: 'Daily 10:35 AM trigger set successfully for logInactiveRunningVTS!' };
 }

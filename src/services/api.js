@@ -2231,5 +2231,56 @@ export async function getWeeklyContinuousInactiveRunningApi(params = {}) {
   }
 }
 
+/**
+ * Daily Inactive + Running VTS Logger to "VTS Data" tab (Master Sheet)
+ * Excludes Pali, Goa, Uniara and "Vendor Vehicles" tab
+ */
+export async function logInactiveRunningVTSApi() {
+  const apiUrl = getStoredApiUrl();
+  if (!apiUrl) {
+    throw new Error('Google Apps Script URL is not configured. Please set it in Settings.');
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'logInactiveRunningVTS'
+      })
+    });
+    const result = await response.json();
+    return result;
+  } catch (err) {
+    console.error('Error logging inactive running to VTS Data:', err);
+    throw err;
+  }
+}
+
+/**
+ * Reformat "VTS Data" tab formatting consistently
+ */
+export async function reformatLogSheetNowApi() {
+  const apiUrl = getStoredApiUrl();
+  if (!apiUrl) {
+    throw new Error('Google Apps Script URL is not configured. Please set it in Settings.');
+  }
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'reformatLogSheetNow'
+      })
+    });
+    const result = await response.json();
+    return result;
+  } catch (err) {
+    console.error('Error reformatting VTS Data log sheet:', err);
+    throw err;
+  }
+}
+
 
 

@@ -5,7 +5,9 @@ import {
   updateInactiveRunningRemark,
   sendCustomNotification,
   syncInactiveRunningSheetApi,
-  getWeeklyContinuousInactiveRunningApi
+  getWeeklyContinuousInactiveRunningApi,
+  logInactiveRunningVTSApi,
+  reformatLogSheetNowApi
 } from '../services/api';
 import { exportToExcelFile, exportToCsvFile } from '../services/exportUtils';
 
@@ -173,6 +175,10 @@ export function InactiveRunningView({
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [syncToast, setSyncToast] = useState(null);
 
+  // Cumulative Master Sheet "VTS Data" Logger State
+  const [loggingVtsData, setLoggingVtsData] = useState(false);
+  const [vtsDataToast, setVtsDataToast] = useState(null);
+
   // 1-Week Continuous Streak / Chronic Defaulters State (Drive Daily Reports)
   const [weeklyData, setWeeklyData] = useState(null);
   const [loadingWeekly, setLoadingWeekly] = useState(false);
@@ -255,6 +261,33 @@ export function InactiveRunningView({
     } finally {
       setSyncingSheet(false);
       setTimeout(() => setSyncToast(null), 6000);
+    }
+  };
+
+  const handleLogToVtsData = async () => {
+    setLoggingVtsData(true);
+    setVtsDataToast(null);
+    try {
+      const res = await logInactiveRunningVTSApi();
+      if (res && res.success) {
+        setVtsDataToast({
+          type: 'success',
+          text: `✓ ${res.message || 'Logged today\'s Inactive+Running vehicles to "VTS Data" sheet!'}`
+        });
+      } else {
+        setVtsDataToast({
+          type: 'error',
+          text: `❌ ${res?.error || 'Failed to log to VTS Data sheet.'}`
+        });
+      }
+    } catch (err) {
+      setVtsDataToast({
+        type: 'error',
+        text: `❌ Error logging to VTS Data: ${err.message}`
+      });
+    } finally {
+      setLoggingVtsData(false);
+      setTimeout(() => setVtsDataToast(null), 6000);
     }
   };
 
@@ -647,6 +680,13 @@ export function InactiveRunningView({
             </div>
           )}
 
+          {vtsDataToast && (
+            <div className={`notification-banner ${vtsDataToast.type}`} style={{ marginBottom: '16px' }}>
+              <Icon name={vtsDataToast.type === 'success' ? 'check' : 'alert'} size={18} />
+              <span>{vtsDataToast.text}</span>
+            </div>
+          )}
+
           {/* KPI Cards */}
           <div className="kpi-grid" style={{ marginBottom: '20px' }}>
             <div className="kpi-card danger">
@@ -747,6 +787,26 @@ export function InactiveRunningView({
               >
                 <Icon name="refresh" size={14} className={syncingSheet ? 'spin' : ''} />
                 <span>{syncingSheet ? 'Syncing...' : '🔄 Sync to Google Sheet'}</span>
+              </button>
+
+              {/* Cumulative Master Sheet "VTS Data" Logger Button */}
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleLogToVtsData}
+                disabled={loggingVtsData}
+                style={{
+                  background: 'linear-gradient(135deg, #0284c7, #0ea5e9)',
+                  borderColor: '#0284c7',
+                  boxShadow: '0 2px 6px rgba(14, 165, 233, 0.3)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+                title="Log to 'VTS Data' tab in Master Google Sheet. Appends today's records (Date | City | Vehicle Name | Last Update | Remark) excluding Pali, Goa, Uniara and Vendor Vehicles. Duplicate-proof for today."
+              >
+                <Icon name="file" size={14} className={loggingVtsData ? 'spin' : ''} />
+                <span>{loggingVtsData ? 'Logging...' : '📋 Log to "VTS Data"'}</span>
               </button>
 
               <button
