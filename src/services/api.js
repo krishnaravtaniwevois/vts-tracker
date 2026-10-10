@@ -145,7 +145,17 @@ export async function fetchAllFleetData() {
       const computedRechargeStatus = getRechargeStatus(remainingDays);
       const override = d.statusOverride || d.override || '';
       const rawRoadcast = String(d.roadcastStatus || d['Status on Roadcast'] || d.status || '').trim();
-      const roadcastStatusClean = rawRoadcast.toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+      const lowerRc = rawRoadcast.toLowerCase();
+      let roadcastStatusClean = 'Active';
+      if (lowerRc === 'inactive') {
+        roadcastStatusClean = 'Inactive';
+      } else if (lowerRc === 'expired' || lowerRc === 'expaired') {
+        roadcastStatusClean = 'Expired';
+      } else if (lowerRc === 'active') {
+        roadcastStatusClean = 'Active';
+      } else if (rawRoadcast) {
+        roadcastStatusClean = rawRoadcast;
+      }
 
       return {
         ...d,
@@ -156,7 +166,7 @@ export async function fetchAllFleetData() {
         status: roadcastStatusClean,
         statusOverride: override,
         finalStatus: cleanFinalStatus(d.finalStatus) || d.finalStatus || '',
-        displayStatus: override || cleanFinalStatus(d.finalStatus) || (roadcastStatusClean.toLowerCase() === 'inactive' ? 'Inactive' : '—'),
+        displayStatus: override || cleanFinalStatus(d.finalStatus) || (roadcastStatusClean.toLowerCase() === 'inactive' ? 'Inactive' : (roadcastStatusClean.toLowerCase() === 'expired' ? 'Expired' : '—')),
         renewalDecision: d.renewalDecision || 'Pending',
         renewalRemark: d.renewalRemark || '',
         inactiveRunningRemark: d.inactiveRunningRemark || ''
@@ -216,7 +226,17 @@ export async function fetchAllFleetData() {
         const override = d.statusOverride || d.override || '';
         const cleanedFinalStatus = cleanFinalStatus(d.finalStatus);
         const rawRoadcast = String(d.roadcastStatus || d['Status on Roadcast'] || d.status || '').trim();
-        const roadcastStatusClean = rawRoadcast.toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+        const lowerRc = rawRoadcast.toLowerCase();
+        let roadcastStatusClean = 'Active';
+        if (lowerRc === 'inactive') {
+          roadcastStatusClean = 'Inactive';
+        } else if (lowerRc === 'expired' || lowerRc === 'expaired') {
+          roadcastStatusClean = 'Expired';
+        } else if (lowerRc === 'active') {
+          roadcastStatusClean = 'Active';
+        } else if (rawRoadcast) {
+          roadcastStatusClean = rawRoadcast;
+        }
 
         return {
           ...d,
@@ -227,7 +247,7 @@ export async function fetchAllFleetData() {
           status: roadcastStatusClean,
           statusOverride: override,
           finalStatus: cleanedFinalStatus || d.finalStatus || '',
-          displayStatus: override || cleanedFinalStatus || (roadcastStatusClean.toLowerCase() === 'inactive' ? 'Inactive' : '—'),
+          displayStatus: override || cleanedFinalStatus || (roadcastStatusClean.toLowerCase() === 'inactive' ? 'Inactive' : (roadcastStatusClean.toLowerCase() === 'expired' ? 'Expired' : '—')),
           renewalDecision: d.renewalDecision || d.decision || 'Pending',
           renewalRemark: d.renewalRemark || d.remark || '',
           inactiveRunningRemark: d.inactiveRunningRemark || ''

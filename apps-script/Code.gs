@@ -2270,14 +2270,18 @@ function getAllFleetData(params) {
     }
 
     var calculatedStatus = 'Active';
+    var lowerRoadcast = String(device.roadcastStatus || '').toLowerCase().trim();
+
     if (device.finalStatus === 'DAMAGED') {
       calculatedStatus = 'Damaged';
+    } else if (lowerRoadcast === 'inactive') {
+      calculatedStatus = 'Inactive';
+    } else if (lowerRoadcast === 'expired' || lowerRoadcast === 'expaired') {
+      calculatedStatus = 'Expired';
     } else if (remainingDays !== undefined && remainingDays < 0) {
       calculatedStatus = 'Expired';
     } else if (remainingDays !== undefined && remainingDays <= VTS_CONFIG.EXPIRY_ALERT_DAYS) {
       calculatedStatus = 'Recharge Soon';
-    } else if (device.roadcastStatus && device.roadcastStatus.toLowerCase() === 'inactive') {
-      calculatedStatus = 'Inactive';
     }
 
     // Match ground vehicle record (City + BG Name OR City + Reg Number)

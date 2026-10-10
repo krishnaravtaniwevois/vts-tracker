@@ -24,21 +24,26 @@ export function Dashboard({
     const rc = String(d.roadcastStatus || d.status || '').toLowerCase();
     return rc === 'inactive';
   }).length;
-  const rechargeSoonCount = devices.filter(d => (d.rechargeStatus || d.status) === 'Recharge Soon').length;
-  const expiredCount = devices.filter(d => (d.rechargeStatus || d.status) === 'Expired').length;
+  const roadcastExpiredCount = devices.filter(d => {
+    const rc = String(d.roadcastStatus || d.status || '').toLowerCase();
+    return rc === 'expired' || rc === 'expaired';
+  }).length;
+  const rechargeSoonCount = devices.filter(d => d.rechargeStatus === 'Recharge Soon').length;
+  const licenseExpiredCount = devices.filter(d => d.rechargeStatus === 'Expired').length;
+  const expiredCount = roadcastExpiredCount > 0 ? roadcastExpiredCount : licenseExpiredCount;
   const damagedCount = devices.filter(d => {
     const fs = String(d.finalStatus || '').toLowerCase();
     return fs === 'damaged' || d.status === 'Damaged' || d.isDamaged;
   }).length;
-  const otherCount = Math.max(0, total - (activeCount + inactiveCount));
+  const otherCount = Math.max(0, total - (activeCount + inactiveCount + roadcastExpiredCount));
 
   const uptimePercent = total > 0 ? ((activeCount / total) * 100).toFixed(1) : '100';
 
   // Segmented health bar percentages
   const activePct = total > 0 ? ((activeCount / total) * 100) : 0;
   const inactivePct = total > 0 ? ((inactiveCount / total) * 100) : 0;
-  const expiredPct = total > 0 ? (((expiredCount + rechargeSoonCount) / total) * 100) : 0;
-  const otherPct = total > 0 ? ((damagedCount / total) * 100) : 0;
+  const expiredPct = total > 0 ? ((roadcastExpiredCount / total) * 100) : 0;
+  const otherPct = total > 0 ? ((otherCount / total) * 100) : 0;
 
   // 4 Top KPI Cards
   const kpiStats = [
@@ -77,14 +82,16 @@ export function Dashboard({
     },
     {
       id: 'renewals',
-      label: 'Renewals & Expired Due',
-      value: expiredCount + rechargeSoonCount,
-      pill: expiredCount > 0 ? `${expiredCount} Expired` : 'Due Soon',
-      sub: `${expiredCount} expired · ${rechargeSoonCount} due in 7 days`,
-      actionText: 'Open Renewals Hub',
+      label: 'Expired & Due Soon',
+      value: roadcastExpiredCount > 0 ? roadcastExpiredCount : (expiredCount + rechargeSoonCount),
+      pill: roadcastExpiredCount > 0 ? `${roadcastExpiredCount} Expired` : (rechargeSoonCount > 0 ? `${rechargeSoonCount} Due Soon` : 'Up to Date'),
+      sub: roadcastExpiredCount > 0
+        ? `${roadcastExpiredCount} expired · ${rechargeSoonCount} license due`
+        : `${expiredCount} expired · ${rechargeSoonCount} due in 7 days`,
+      actionText: 'Filter Expired',
       tone: 'red',
       icon: 'refresh',
-      filterTarget: 'Renewals'
+      filterTarget: 'Expired'
     }
   ];
 
@@ -103,7 +110,12 @@ export function Dashboard({
 
   // Priority Operational Radar (Expired or Due Soon)
   const urgentDevices = devices
-    .filter(d => (d.rechargeStatus || d.status) === 'Expired' || (d.rechargeStatus || d.status) === 'Recharge Soon')
+    .filter(d => {
+      const rc = String(d.roadcastStatus || '').toLowerCase();
+      const st = String(d.status || '').toLowerCase();
+      const rs = String(d.rechargeStatus || '').toLowerCase();
+      return rc === 'expired' || st === 'expired' || rs === 'expired' || rs === 'recharge soon';
+    })
     .sort((a, b) => (a.remainingDays ?? 999) - (b.remainingDays ?? 999))
     .slice(0, 4);
 
@@ -271,12 +283,12 @@ export function Dashboard({
           <div
             className="health-segment expired"
             style={{ width: `${expiredPct}%` }}
-            title={`Expired / Due Soon: ${expiredCount + rechargeSoonCount} (${expiredPct.toFixed(1)}%)`}
+            title={`Roadcast Expired: ${roadcastExpiredCount} (${expiredPct.toFixed(1)}%)`}
           />
           <div
             className="health-segment other"
             style={{ width: `${otherPct}%` }}
-            title={`Damaged / Other: ${damagedCount + otherCount} (${otherPct.toFixed(1)}%)`}
+            title={`Vendor / Site: ${otherCount} (${otherPct.toFixed(1)}%)`}
           />
         </div>
 
@@ -307,23 +319,26 @@ export function Dashboard({
 
           <button
             className="health-legend-btn"
-            onClick={() => onNavigate('Renewals')}
-            title="Open license renewals hub"
+            onClick={() => {
+              onSelectStatusFilter('Expired');
+              onNavigate('Devices');
+            }}
+            title="Filter expired devices"
           >
             <span className="legend-dot expired" />
-            <span>Expired / Due: <strong>{expiredCount + rechargeSoonCount}</strong> ({expiredPct.toFixed(1)}%)</span>
+            <span>Expired: <strong>{roadcastExpiredCount}</strong> ({expiredPct.toFixed(1)}%)</span>
           </button>
 
           <button
             className="health-legend-btn"
             onClick={() => {
-              onSelectStatusFilter('Damaged');
+              onSelectStatusFilter('All');
               onNavigate('Devices');
             }}
-            title="Filter damaged devices"
+            title="Vendor & Site unlinked devices"
           >
             <span className="legend-dot other" />
-            <span>Damaged / Repair: <strong>{damagedCount}</strong></span>
+            <span>Vendor / Site: <strong>{otherCount}</strong> ({otherPct.toFixed(1)}%)</span>
           </button>
         </div>
       </div>
