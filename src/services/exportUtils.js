@@ -74,7 +74,9 @@ export function exportToExcelFile(data, fileNamePrefix = '900_Master_Fleet') {
     return;
   }
 
-  const exportData = formatDevicesForExport(data);
+  // Handle already-formatted objects (e.g. from VehicleHistoryView)
+  const isAlreadyFormatted = data[0] && (data[0]['Vehicle Name'] || data[0]['IMEI / Unique ID'] || (data[0]['Name'] && data[0]['Uniqueid']));
+  const exportData = isAlreadyFormatted ? data : formatDevicesForExport(data);
   const worksheet = XLSX.utils.json_to_sheet(exportData);
 
   // Force IMEI & Phone as text (not scientific notation)

@@ -127,99 +127,153 @@ export function DeviceList({
   };
 
   // ----------------------------------------------------
-  // Dynamic Cascading Filters Architecture
+  // ----------------------------------------------------
+  // Dynamic Multidirectional Cascading Filters Architecture
   // ----------------------------------------------------
 
-  // Step 1: Base list matching Search query
-  const searchFilteredList = useMemo(() => {
-    return devices.filter((d) => {
-      const q = search.toLowerCase().trim();
-      if (!q) return true;
-      return (
-        (d.vehicle && d.vehicle.toLowerCase().includes(q)) ||
-        (d.imei && d.imei.toLowerCase().includes(q)) ||
-        (d.sim && d.sim.toLowerCase().includes(q)) ||
-        (d.city && d.city.toLowerCase().includes(q)) ||
-        (d.remark && d.remark.toLowerCase().includes(q))
-      );
-    });
-  }, [devices, search]);
+  const normalizeCityVal = (c) => {
+    if (!c) return 'Other';
+    const s = String(c).trim();
+    if (s.toLowerCase() === 'iosal') return 'Losal';
+    return s;
+  };
 
-  // Dynamic Cities based on searchFilteredList
+  const matchesSearch = (d, q) => {
+    if (!q) return true;
+    const lowerQ = q.toLowerCase().trim();
+    return (
+      (d.vehicle && d.vehicle.toLowerCase().includes(lowerQ)) ||
+      (d.imei && String(d.imei).includes(lowerQ)) ||
+      (d.sim && String(d.sim).includes(lowerQ)) ||
+      (d.city && normalizeCityVal(d.city).toLowerCase().includes(lowerQ)) ||
+      (d.remark && d.remark.toLowerCase().includes(lowerQ)) ||
+      (d.roadcastStatus && d.roadcastStatus.toLowerCase().includes(lowerQ)) ||
+      (d.finalStatus && d.finalStatus.toLowerCase().includes(lowerQ)) ||
+      (d.vtsType && d.vtsType.toLowerCase().includes(lowerQ))
+    );
+  };
+
+  const matchesCity = (d, cFilter) => {
+    if (!cFilter || cFilter === 'All') return true;
+    return normalizeCityVal(d.city).toLowerCase() === normalizeCityVal(cFilter).toLowerCase();
+  };
+
+  const matchesStatus = (d, sFilter) => {
+    if (!sFilter || sFilter === 'All') return true;
+    const cur = d.roadcastStatus || d.status || 'Active';
+    return cur.toLowerCase() === sFilter.toLowerCase();
+  };
+
+  const matchesFinalStatus = (d, fsFilter) => {
+    if (!fsFilter || fsFilter === 'All') return true;
+    const fs = d.finalStatus || '—';
+    return fs.toLowerCase() === fsFilter.toLowerCase();
+  };
+
+  const matchesVtsType = (d, vtFilter) => {
+    if (!vtFilter || vtFilter === 'All') return true;
+    const vt = d.vtsType || 'VTS Package 4G';
+    return vt.toLowerCase() === vtFilter.toLowerCase();
+  };
+
+  // 1. City Pool: All devices matching search + roadcast + finalStatus + vtsType (ignoring city)
+  const cityPool = useMemo(() => {
+    return devices.filter((d) =>
+      matchesSearch(d, search) &&
+      matchesStatus(d, statusFilter) &&
+      matchesFinalStatus(d, finalStatusFilter) &&
+      matchesVtsType(d, vtsTypeFilter)
+    );
+  }, [devices, search, statusFilter, finalStatusFilter, vtsTypeFilter]);
+
   const dynamicCities = useMemo(() => {
     const map = new Map();
-    searchFilteredList.forEach((d) => {
-      if (d.city) map.set(d.city, (map.get(d.city) || 0) + 1);
+    cityPool.forEach((d) => {
+      const c = normalizeCityVal(d.city);
+      if (c) map.set(c, (map.get(c) || 0) + 1);
     });
+    if (cityFilter !== 'All' && !map.has(cityFilter)) {
+      map.set(cityFilter, 0);
+    }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [searchFilteredList]);
+  }, [cityPool, cityFilter]);
 
-  const effectiveCity = dynamicCities.some(([c]) => c === cityFilter) ? cityFilter : 'All';
+  // 2. Roadcast Status Pool: All devices matching search + city + finalStatus + vtsType (ignoring roadcast)
+  const statusPool = useMemo(() => {
+    return devices.filter((d) =>
+      matchesSearch(d, search) &&
+      matchesCity(d, cityFilter) &&
+      matchesFinalStatus(d, finalStatusFilter) &&
+      matchesVtsType(d, vtsTypeFilter)
+    );
+  }, [devices, search, cityFilter, finalStatusFilter, vtsTypeFilter]);
 
-  // Step 2: Filter by City
-  const cityFilteredList = useMemo(() => {
-    if (effectiveCity === 'All') return searchFilteredList;
-    return searchFilteredList.filter((d) => d.city === effectiveCity);
-  }, [searchFilteredList, effectiveCity]);
-
-  // Dynamic Roadcast Statuses based on cityFilteredList
   const dynamicRoadcastStatuses = useMemo(() => {
     const map = new Map();
-    cityFilteredList.forEach((d) => {
-      const status = d.roadcastStatus || d.status || 'Active';
-      map.set(status, (map.get(status) || 0) + 1);
+    statusPool.forEach((d) => {
+      const s = d.roadcastStatus || d.status || 'Active';
+      map.set(s, (map.get(s) || 0) + 1);
     });
+    if (statusFilter !== 'All' && !map.has(statusFilter)) {
+      map.set(statusFilter, 0);
+    }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [cityFilteredList]);
+  }, [statusPool, statusFilter]);
 
-  const effectiveStatus = dynamicRoadcastStatuses.some(([s]) => s.toLowerCase() === statusFilter.toLowerCase()) ? statusFilter : 'All';
+  // 3. Final Status Pool: All devices matching search + city + roadcast + vtsType (ignoring finalStatus)
+  const finalStatusPool = useMemo(() => {
+    return devices.filter((d) =>
+      matchesSearch(d, search) &&
+      matchesCity(d, cityFilter) &&
+      matchesStatus(d, statusFilter) &&
+      matchesVtsType(d, vtsTypeFilter)
+    );
+  }, [devices, search, cityFilter, statusFilter, vtsTypeFilter]);
 
-  // Step 3: Filter by Roadcast Status
-  const statusFilteredList = useMemo(() => {
-    if (effectiveStatus === 'All') return cityFilteredList;
-    return cityFilteredList.filter((d) => {
-      const current = d.roadcastStatus || d.status || '';
-      return current.toLowerCase() === effectiveStatus.toLowerCase();
-    });
-  }, [cityFilteredList, effectiveStatus]);
-
-  // Dynamic Final Statuses based on statusFilteredList
   const dynamicFinalStatuses = useMemo(() => {
     const map = new Map();
-    statusFilteredList.forEach((d) => {
+    finalStatusPool.forEach((d) => {
       const fs = d.finalStatus || '—';
       map.set(fs, (map.get(fs) || 0) + 1);
     });
+    if (finalStatusFilter !== 'All' && !map.has(finalStatusFilter)) {
+      map.set(finalStatusFilter, 0);
+    }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [statusFilteredList]);
+  }, [finalStatusPool, finalStatusFilter]);
 
-  const effectiveFinalStatus = dynamicFinalStatuses.some(([fs]) => fs.toLowerCase() === finalStatusFilter.toLowerCase()) ? finalStatusFilter : 'All';
+  // 4. VTS Type Pool: All devices matching search + city + roadcast + finalStatus (ignoring vtsType)
+  const vtsTypePool = useMemo(() => {
+    return devices.filter((d) =>
+      matchesSearch(d, search) &&
+      matchesCity(d, cityFilter) &&
+      matchesStatus(d, statusFilter) &&
+      matchesFinalStatus(d, finalStatusFilter)
+    );
+  }, [devices, search, cityFilter, statusFilter, finalStatusFilter]);
 
-  // Step 4: Filter by Final Status
-  const finalStatusFilteredList = useMemo(() => {
-    if (effectiveFinalStatus === 'All') return statusFilteredList;
-    return statusFilteredList.filter((d) => {
-      const fs = d.finalStatus || '—';
-      return fs.toLowerCase() === effectiveFinalStatus.toLowerCase();
-    });
-  }, [statusFilteredList, effectiveFinalStatus]);
-
-  // Dynamic VTS Types based on finalStatusFilteredList
   const dynamicVtsTypes = useMemo(() => {
     const map = new Map();
-    finalStatusFilteredList.forEach((d) => {
-      if (d.vtsType) map.set(d.vtsType, (map.get(d.vtsType) || 0) + 1);
+    vtsTypePool.forEach((d) => {
+      const vt = d.vtsType || 'VTS Package 4G';
+      map.set(vt, (map.get(vt) || 0) + 1);
     });
+    if (vtsTypeFilter !== 'All' && !map.has(vtsTypeFilter)) {
+      map.set(vtsTypeFilter, 0);
+    }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [finalStatusFilteredList]);
+  }, [vtsTypePool, vtsTypeFilter]);
 
-  const effectiveVtsType = dynamicVtsTypes.some(([vt]) => vt.toLowerCase() === vtsTypeFilter.toLowerCase()) ? vtsTypeFilter : 'All';
-
-  // Step 5: Final Filtered devices
+  // 5. Final Filtered devices: Matching ALL active filters simultaneously
   const filtered = useMemo(() => {
-    if (effectiveVtsType === 'All') return finalStatusFilteredList;
-    return finalStatusFilteredList.filter((d) => (d.vtsType || '').toLowerCase() === effectiveVtsType.toLowerCase());
-  }, [finalStatusFilteredList, effectiveVtsType]);
+    return devices.filter((d) =>
+      matchesSearch(d, search) &&
+      matchesCity(d, cityFilter) &&
+      matchesStatus(d, statusFilter) &&
+      matchesFinalStatus(d, finalStatusFilter) &&
+      matchesVtsType(d, vtsTypeFilter)
+    );
+  }, [devices, search, cityFilter, statusFilter, finalStatusFilter, vtsTypeFilter]);
 
   const effectivePageSize = pageSize === 0 ? filtered.length || 1 : pageSize;
   const totalPages = Math.ceil(filtered.length / effectivePageSize) || 1;
@@ -359,13 +413,13 @@ export function DeviceList({
           <div className="select-wrap">
             <label>City / Site:</label>
             <select
-              value={effectiveCity}
+              value={cityFilter}
               onChange={(e) => {
                 setCityFilter(e.target.value);
                 setCurrentPage(1);
               }}
             >
-              <option value="All">All Cities ({searchFilteredList.length})</option>
+              <option value="All">All Cities ({cityPool.length})</option>
               {dynamicCities.map(([cityName, count]) => (
                 <option key={cityName} value={cityName}>
                   {cityName} ({count})
@@ -378,13 +432,13 @@ export function DeviceList({
           <div className="select-wrap">
             <label>Roadcast Status (Col F):</label>
             <select
-              value={effectiveStatus}
+              value={statusFilter}
               onChange={(e) => {
                 setStatusFilter(e.target.value);
                 setCurrentPage(1);
               }}
             >
-              <option value="All">All Statuses ({cityFilteredList.length})</option>
+              <option value="All">All Statuses ({statusPool.length})</option>
               {dynamicRoadcastStatuses.map(([statusName, count]) => (
                 <option key={statusName} value={statusName}>
                   {statusName} ({count})
@@ -397,13 +451,13 @@ export function DeviceList({
           <div className="select-wrap">
             <label>Final Status (Col H):</label>
             <select
-              value={effectiveFinalStatus}
+              value={finalStatusFilter}
               onChange={(e) => {
                 setFinalStatusFilter(e.target.value);
                 setCurrentPage(1);
               }}
             >
-              <option value="All">All Final Statuses ({statusFilteredList.length})</option>
+              <option value="All">All Final Statuses ({finalStatusPool.length})</option>
               {dynamicFinalStatuses.map(([fsName, count]) => (
                 <option key={fsName} value={fsName}>
                   {fsName} ({count})
@@ -416,13 +470,13 @@ export function DeviceList({
           <div className="select-wrap">
             <label>VTS Type (Col I):</label>
             <select
-              value={effectiveVtsType}
+              value={vtsTypeFilter}
               onChange={(e) => {
                 setVtsTypeFilter(e.target.value);
                 setCurrentPage(1);
               }}
             >
-              <option value="All">All VTS Types ({finalStatusFilteredList.length})</option>
+              <option value="All">All VTS Types ({vtsTypePool.length})</option>
               {dynamicVtsTypes.map(([vtName, count]) => (
                 <option key={vtName} value={vtName}>
                   {vtName} ({count})
@@ -432,8 +486,18 @@ export function DeviceList({
           </div>
 
           {hasActiveFilters && (
-            <button className="secondary-button compact" onClick={handleResetFilters}>
-              Reset Filters
+            <button
+              className="secondary-button compact"
+              onClick={handleResetFilters}
+              style={{
+                color: '#f87171',
+                borderColor: 'rgba(239, 68, 68, 0.4)',
+                background: 'rgba(239, 68, 68, 0.12)',
+                fontWeight: 600
+              }}
+              title="Reset all active filters and search to default"
+            >
+              ✕ Reset All
             </button>
           )}
         </div>

@@ -2364,13 +2364,35 @@ export function RenewalDashboard({
                 handlePageChange(1);
               }}
             >
-              {cities.map((c) => (
-                <option key={c} value={c}>
-                  {c === 'All' ? `All Cities (${cities.length - 1})` : c}
+              <option value="All">All Cities ({batchCounts.total} units · {cityBreakdown.length} sites)</option>
+              {cityBreakdown.map((cb) => (
+                <option key={cb.city} value={cb.city}>
+                  {cb.city} ({cb.total} units · Yes: {cb.yes}, No: {cb.no})
                 </option>
               ))}
             </select>
           </div>
+          {cityFilter !== 'All' && (
+            <button
+              type="button"
+              className="secondary-button compact"
+              onClick={() => {
+                setCityFilter('All');
+                safeSetItem('vts_renewal_city_filter', 'All');
+                handlePageChange(1);
+              }}
+              style={{
+                color: '#f87171',
+                borderColor: 'rgba(239, 68, 68, 0.4)',
+                background: 'rgba(239, 68, 68, 0.12)',
+                fontSize: '11px',
+                fontWeight: 600
+              }}
+              title="Reset city filter to All"
+            >
+              ✕ Reset City
+            </button>
+          )}
         </div>
       </div>
 
