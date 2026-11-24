@@ -9,7 +9,7 @@ import {
   logInactiveRunningVTSApi,
   reformatLogSheetNowApi
 } from '../services/api';
-import { exportToExcelFile, exportToCsvFile } from '../services/exportUtils';
+import { exportToExcelFile, exportToCsvFile, exportAnomalyToExcel } from '../services/exportUtils';
 
 export function InactiveRunningView({
   users = [],
@@ -823,7 +823,7 @@ export function InactiveRunningView({
 
               <button
                 className="secondary-button"
-                onClick={() => exportToExcelFile(filteredAnomaly, `Inactive_Running_Vehicles`)}
+                onClick={() => exportAnomalyToExcel(filteredAnomaly, `Inactive_Running_Vehicles`)}
               >
                 <Icon name="download" size={13} /> Excel ({filteredAnomaly.length})
               </button>
@@ -831,7 +831,7 @@ export function InactiveRunningView({
               {weeklyData?.chronicCount > 0 && (
                 <button
                   className="secondary-button"
-                  onClick={() => exportToExcelFile(weeklyData.chronicDefaulters, `Weekly_Continuous_Defaulters`)}
+                  onClick={() => exportAnomalyToExcel(weeklyData.chronicDefaulters, `Weekly_Continuous_Defaulters`)}
                   style={{ color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
                   title="Export 1-Week Continuous Chronic Defaulters list"
                 >

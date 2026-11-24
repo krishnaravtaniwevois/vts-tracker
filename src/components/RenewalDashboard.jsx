@@ -26,6 +26,13 @@ import {
 import { safeSetItem, safeGetItem, safeGetJson } from '../utils/storage';
 
 
+export function normalizeCity(name) {
+  if (!name) return 'Unassigned';
+  const s = String(name).trim();
+  if (s.toLowerCase() === 'iosal') return 'Losal';
+  return s;
+}
+
 export function RenewalDashboard({
   devices = [],
   renewalLogs = [],
@@ -391,11 +398,11 @@ export function RenewalDashboard({
   const cities = useMemo(() => {
     const set = new Set();
     enrichedDevices.forEach((d) => {
-      if (d.city) set.add(d.city);
+      if (d.city) set.add(normalizeCity(d.city));
     });
     if (sheetDevices && Array.isArray(sheetDevices)) {
       sheetDevices.forEach((d) => {
-        if (d.city) set.add(d.city);
+        if (d.city) set.add(normalizeCity(d.city));
       });
     }
     return ['All', ...Array.from(set).sort()];
@@ -473,7 +480,7 @@ export function RenewalDashboard({
           sim: masterDev.sim || sd.sim || sd.phone || '',
           licenseEnd: displayLicEnd,
           displayLicenseEnd: displayLicEnd,
-          city: masterDev.city || sd.city || '',
+          city: normalizeCity(masterDev.city || sd.city || ''),
           parsedDate,
           remainingDays,
           monthKey,
@@ -503,7 +510,7 @@ export function RenewalDashboard({
     const map = {};
 
     sourceList.forEach((d) => {
-      const city = String(d.city || 'Unassigned').trim();
+      const city = normalizeCity(d.city || 'Unassigned');
       if (!map[city]) {
         map[city] = { city, total: 0, yes: 0, no: 0, pending: 0 };
       }
@@ -536,7 +543,7 @@ export function RenewalDashboard({
       }
 
       // 2. City Filter
-      if (cityFilter !== 'All' && d.city !== cityFilter) {
+      if (cityFilter !== 'All' && normalizeCity(d.city) !== normalizeCity(cityFilter)) {
         return false;
       }
 
@@ -1024,20 +1031,50 @@ export function RenewalDashboard({
 
     const exportRows = filteredDevices.map((d, index) => ({
       'SR.': index + 1,
-      'Name': d.vehicle,
-      'Uniqueid': String(d.imei),
-      'Phone': String(d.sim || ''),
-      'City': d.city,
+      'Name': d.vehicle || d.name || '',
+      'Uniqueid': '\'' + String(d.imei || d.uniqueid || '').trim(),
+      'Phone': '\'' + String(d.sim || d.phone || '').trim(),
+      'City': d.city || '',
       'License End': d.displayLicenseEnd || d.licenseEnd || '',
       'Remaining Days': d.remainingDays !== undefined ? d.remainingDays : '',
-      'Recharge Status': d.rechargeStatus,
-      'Status on Roadcast': d.roadcastStatus,
-      'Final Status': d.finalStatus,
-      'Renewal Decision': d.renewalDecision,
-      'Renewal Remark': d.renewalRemark
+      'Recharge Status': d.rechargeStatus || '',
+      'Status on Roadcast': d.roadcastStatus || '',
+      'Final Status': d.finalStatus || '',
+      'Renewal Decision': d.renewalDecision || 'Pending',
+      'Renewal Remark': d.renewalRemark || ''
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportRows);
+
+    // Force Uniqueid & Phone as text (prevent scientific notation in Excel)
+    const textCols = [2, 3]; // Uniqueid (col C), Phone (col D) — 0-indexed
+    for (let r = 1; r <= exportRows.length; r++) {
+      textCols.forEach(c => {
+        const cellRef = XLSX.utils.encode_cell({ r, c });
+        if (ws[cellRef]) {
+          ws[cellRef].t = 's';
+          const val = String(ws[cellRef].v || '');
+          if (val.startsWith("'")) ws[cellRef].v = val.slice(1);
+        }
+      });
+    }
+
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 6 },  // SR.
+      { wch: 22 }, // Name
+      { wch: 20 }, // Uniqueid
+      { wch: 18 }, // Phone
+      { wch: 16 }, // City
+      { wch: 16 }, // License End
+      { wch: 16 }, // Remaining Days
+      { wch: 16 }, // Recharge Status
+      { wch: 18 }, // Status on Roadcast
+      { wch: 16 }, // Final Status
+      { wch: 16 }, // Renewal Decision
+      { wch: 30 }  // Renewal Remark
+    ];
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Renewal_List');
     const filename = `VTS_Renewals_${filterPreset}_${new Date().toISOString().slice(0, 10)}.xlsx`;
@@ -1094,62 +1131,40 @@ export function RenewalDashboard({
       ? activeSheetDeviceList
       : enrichedDevices;
 
+    // Pool by selected City filter (if user selected a city, respect it; otherwise use entire tab)
+    const pool = (cityFilter && cityFilter !== 'All')
+      ? baseSource.filter(d => normalizeCity(d.city) === normalizeCity(cityFilter))
+      : baseSource;
+
     let targetList = [];
     let label = 'ALL_COMBINED';
 
     if (exportType === 'yes') {
       label = 'YES_APPROVED';
-      const filteredYes = filteredDevices.filter((d) => {
+      targetList = pool.filter((d) => {
         const dec = String(d.renewalDecision || '').trim().toLowerCase();
         return dec === 'yes' || dec === 'approved';
       });
-      const allTabYes = baseSource.filter((d) => {
-        const dec = String(d.renewalDecision || '').trim().toLowerCase();
-        return dec === 'yes' || dec === 'approved';
-      });
-
-      // If forceAllInTab or if filtered list has 0 YES (e.g. searching for something else), export all YES in tab!
-      if (forceAllInTab || filteredYes.length === 0) {
-        targetList = allTabYes;
-      } else {
-        targetList = filteredYes;
-      }
     } else if (exportType === 'no') {
       label = 'NO_DECLINED';
-      const filteredNo = filteredDevices.filter((d) => {
+      targetList = pool.filter((d) => {
         const dec = String(d.renewalDecision || '').trim().toLowerCase();
         return dec === 'no' || dec === 'declined' || dec === 'rejected';
       });
-      const allTabNo = baseSource.filter((d) => {
-        const dec = String(d.renewalDecision || '').trim().toLowerCase();
-        return dec === 'no' || dec === 'declined' || dec === 'rejected';
-      });
-
-      // If forceAllInTab or if filtered list has 0 NO, fallback to allTabNo
-      if (forceAllInTab || filteredNo.length === 0) {
-        targetList = allTabNo;
-      } else {
-        targetList = filteredNo;
-      }
     } else if (exportType === 'blank' || exportType === 'pending') {
       label = 'BLANK_PENDING';
-      const filteredPending = filteredDevices.filter((d) => {
+      targetList = pool.filter((d) => {
         const dec = String(d.renewalDecision || '').trim().toLowerCase();
         return dec !== 'yes' && dec !== 'approved' && dec !== 'no' && dec !== 'declined' && dec !== 'rejected';
       });
-      const allTabPending = baseSource.filter((d) => {
-        const dec = String(d.renewalDecision || '').trim().toLowerCase();
-        return dec !== 'yes' && dec !== 'approved' && dec !== 'no' && dec !== 'declined' && dec !== 'rejected';
-      });
-      targetList = (forceAllInTab || filteredPending.length === 0) ? allTabPending : filteredPending;
     } else {
       // 'all'
-      targetList = forceAllInTab ? baseSource : (filteredDevices.length > 0 ? filteredDevices : baseSource);
+      targetList = pool;
       label = 'ALL_FLEET';
     }
 
     if (!targetList || targetList.length === 0) {
-      alert(`No records found for ${label.replace('_', ' ')} export in ${activeCycleTab || 'current view'}.`);
+      alert(`No records found for ${label.replace('_', ' ')} export in ${activeCycleTab || 'current view'}${cityFilter !== 'All' ? ` for city ${cityFilter}` : ''}.`);
       return;
     }
 
@@ -1159,8 +1174,8 @@ export function RenewalDashboard({
       return {
         'SR.': index + 1,
         'Name': d.vehicle || d.name || '',
-        'Uniqueid': String(d.imei || d.uniqueid || '').trim(),
-        'Phone': String(d.sim || d.phone || '').trim(),
+        'Uniqueid': '\'' + String(d.imei || d.uniqueid || '').trim(),
+        'Phone': '\'' + String(d.sim || d.phone || '').trim(),
         'License End': rawLicenseEnd,
         'City': d.city || '',
         'Remark': d.renewalRemark || '',
@@ -1171,6 +1186,19 @@ export function RenewalDashboard({
     });
 
     const ws = XLSX.utils.json_to_sheet(exportRows);
+
+    // Force Uniqueid & Phone as text (prevent scientific notation in Excel)
+    const textCols = [2, 3]; // Uniqueid (col C), Phone (col D) — 0-indexed
+    for (let r = 1; r <= exportRows.length; r++) {
+      textCols.forEach(c => {
+        const cellRef = XLSX.utils.encode_cell({ r, c });
+        if (ws[cellRef]) {
+          ws[cellRef].t = 's';
+          const val = String(ws[cellRef].v || '');
+          if (val.startsWith("'")) ws[cellRef].v = val.slice(1);
+        }
+      });
+    }
 
     // Auto-fit column widths
     const colWidths = [
@@ -1825,7 +1853,6 @@ export function RenewalDashboard({
             type="button"
             className="secondary-button compact"
             onClick={() => handleExportBatch('yes', 'xlsx')}
-            disabled={tabYesCount === 0 && batchCounts.yes === 0}
             title="Download Excel (.xlsx) containing all approved YES vehicles with exact 10 columns"
             style={{
               background: 'rgba(16, 185, 129, 0.16)',
@@ -1834,17 +1861,17 @@ export function RenewalDashboard({
               fontWeight: 600,
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px'
+              gap: '5px',
+              opacity: tabYesCount === 0 ? 0.6 : 1
             }}
           >
-            📥 Download YES ({batchCounts.yes > 0 && batchCounts.yes !== tabYesCount ? `${batchCounts.yes} of ${tabYesCount}` : tabYesCount})
+            📥 YES Excel ({tabYesCount})
           </button>
 
           <button
             type="button"
             className="secondary-button compact"
             onClick={() => handleExportBatch('no', 'xlsx')}
-            disabled={tabNoCount === 0 && batchCounts.no === 0}
             title="Download Excel (.xlsx) containing all declined NO vehicles with exact 10 columns"
             style={{
               background: 'rgba(239, 68, 68, 0.16)',
@@ -1853,10 +1880,11 @@ export function RenewalDashboard({
               fontWeight: 600,
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px'
+              gap: '5px',
+              opacity: tabNoCount === 0 ? 0.6 : 1
             }}
           >
-            📥 Download NO ({batchCounts.no > 0 && batchCounts.no !== tabNoCount ? `${batchCounts.no} of ${tabNoCount}` : tabNoCount})
+            📥 NO Excel ({tabNoCount})
           </button>
 
           <button
