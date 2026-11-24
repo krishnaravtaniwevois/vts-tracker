@@ -13,6 +13,7 @@ import {
   applyBatchRenewals,
   batchUpdateLicenseDates,
   updateRenewalSheetUrl,
+  syncMasterToRenewalSheets,
   RENEWAL_DONE_SHEET_URL
 } from '../services/api';
 import {
@@ -105,6 +106,8 @@ export function RenewalDashboard({
   const [editingLicImei, setEditingLicImei] = useState(null);
   const [isUpdatingBatch, setIsUpdatingBatch] = useState(false);
   const [showAllCities, setShowAllCities] = useState(false);
+  const [citySearchQuery, setCitySearchQuery] = useState('');
+  const [syncStatusNotice, setSyncStatusNotice] = useState(null);
 
   // Extract & Batch Sheet Creation States
   const [showExtractModal, setShowExtractModal] = useState(false);
@@ -635,6 +638,46 @@ export function RenewalDashboard({
     };
   }, [filteredDevices]);
 
+  // Overall tab Yes and No counts (unrestricted by search queries)
+  const tabYesCount = useMemo(() => {
+    const list = filterPreset === 'active_sheet' ? activeSheetDeviceList : enrichedDevices;
+    return list.filter(d => {
+      const dec = String(d.renewalDecision || '').trim().toLowerCase();
+      return dec === 'yes' || dec === 'approved';
+    }).length;
+  }, [filterPreset, activeSheetDeviceList, enrichedDevices]);
+
+  const tabNoCount = useMemo(() => {
+    const list = filterPreset === 'active_sheet' ? activeSheetDeviceList : enrichedDevices;
+    return list.filter(d => {
+      const dec = String(d.renewalDecision || '').trim().toLowerCase();
+      return dec === 'no' || dec === 'declined' || dec === 'rejected';
+    }).length;
+  }, [filterPreset, activeSheetDeviceList, enrichedDevices]);
+
+  const handleSyncTabWithMaster = async () => {
+    setIsSheetLoading(true);
+    setSyncStatusNotice(null);
+    try {
+      const syncRes = await syncMasterToRenewalSheets(activeCycleTab, true);
+      await loadCycleData(activeCycleTab);
+      if (syncRes && syncRes.success) {
+        setSyncStatusNotice({
+          type: 'success',
+          text: syncRes.updatedCount > 0
+            ? `✓ Synced ${syncRes.updatedCount} vehicle updates from Master Sheet into Google Sheet!`
+            : '✓ Tab refreshed — all vehicle details (City, Name, SIM) match Master Sheet!'
+        });
+      }
+    } catch (err) {
+      console.warn('Sync tab error:', err);
+      await loadCycleData(activeCycleTab);
+    } finally {
+      setIsSheetLoading(false);
+      setTimeout(() => setSyncStatusNotice(null), 6000);
+    }
+  };
+
   // Paginated devices
   const paginatedDevices = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
@@ -1045,44 +1088,81 @@ export function RenewalDashboard({
   };
 
   // Dedicated Multi-Batch Download Handler (Yes / No / Blank / Combined) in XLSX and CSV
-  const handleExportBatch = (exportType = 'all', format = 'xlsx') => {
-    let targetList = filteredDevices;
+  const handleExportBatch = (exportType = 'all', format = 'xlsx', forceAllInTab = false) => {
+    // Base source: entire active cycle tab or full fleet
+    const baseSource = (filterPreset === 'active_sheet' && activeSheetDeviceList && activeSheetDeviceList.length > 0)
+      ? activeSheetDeviceList
+      : enrichedDevices;
+
+    let targetList = [];
     let label = 'ALL_COMBINED';
 
     if (exportType === 'yes') {
-      targetList = filteredDevices.filter((d) => {
+      label = 'YES_APPROVED';
+      const filteredYes = filteredDevices.filter((d) => {
         const dec = String(d.renewalDecision || '').trim().toLowerCase();
         return dec === 'yes' || dec === 'approved';
       });
-      label = 'YES_APPROVED';
+      const allTabYes = baseSource.filter((d) => {
+        const dec = String(d.renewalDecision || '').trim().toLowerCase();
+        return dec === 'yes' || dec === 'approved';
+      });
+
+      // If forceAllInTab or if filtered list has 0 YES (e.g. searching for something else), export all YES in tab!
+      if (forceAllInTab || filteredYes.length === 0) {
+        targetList = allTabYes;
+      } else {
+        targetList = filteredYes;
+      }
     } else if (exportType === 'no') {
-      targetList = filteredDevices.filter((d) => {
+      label = 'NO_DECLINED';
+      const filteredNo = filteredDevices.filter((d) => {
         const dec = String(d.renewalDecision || '').trim().toLowerCase();
         return dec === 'no' || dec === 'declined' || dec === 'rejected';
       });
-      label = 'NO_DECLINED';
+      const allTabNo = baseSource.filter((d) => {
+        const dec = String(d.renewalDecision || '').trim().toLowerCase();
+        return dec === 'no' || dec === 'declined' || dec === 'rejected';
+      });
+
+      // If forceAllInTab or if filtered list has 0 NO, fallback to allTabNo
+      if (forceAllInTab || filteredNo.length === 0) {
+        targetList = allTabNo;
+      } else {
+        targetList = filteredNo;
+      }
     } else if (exportType === 'blank' || exportType === 'pending') {
-      targetList = filteredDevices.filter((d) => {
+      label = 'BLANK_PENDING';
+      const filteredPending = filteredDevices.filter((d) => {
         const dec = String(d.renewalDecision || '').trim().toLowerCase();
         return dec !== 'yes' && dec !== 'approved' && dec !== 'no' && dec !== 'declined' && dec !== 'rejected';
       });
-      label = 'BLANK_PENDING';
+      const allTabPending = baseSource.filter((d) => {
+        const dec = String(d.renewalDecision || '').trim().toLowerCase();
+        return dec !== 'yes' && dec !== 'approved' && dec !== 'no' && dec !== 'declined' && dec !== 'rejected';
+      });
+      targetList = (forceAllInTab || filteredPending.length === 0) ? allTabPending : filteredPending;
+    } else {
+      // 'all'
+      targetList = forceAllInTab ? baseSource : (filteredDevices.length > 0 ? filteredDevices : baseSource);
+      label = 'ALL_FLEET';
     }
 
-    if (targetList.length === 0) {
-      alert(`No records found for ${label} export.`);
+    if (!targetList || targetList.length === 0) {
+      alert(`No records found for ${label.replace('_', ' ')} export in ${activeCycleTab || 'current view'}.`);
       return;
     }
+
     const exportRows = targetList.map((d, index) => {
       const rawLicenseEnd = d.displayLicenseEnd || d.licenseEnd || '';
 
       return {
         'SR.': index + 1,
-        'Name': d.vehicle,
-        'Uniqueid': String(d.imei),
-        'Phone': String(d.sim || ''),
+        'Name': d.vehicle || d.name || '',
+        'Uniqueid': String(d.imei || d.uniqueid || '').trim(),
+        'Phone': String(d.sim || d.phone || '').trim(),
         'License End': rawLicenseEnd,
-        'City': d.city,
+        'City': d.city || '',
         'Remark': d.renewalRemark || '',
         'Rechage status': d.renewalDecision || 'Pending',
         'New License End': d.newLicenseEnd || '',
@@ -1091,8 +1171,25 @@ export function RenewalDashboard({
     });
 
     const ws = XLSX.utils.json_to_sheet(exportRows);
+
+    // Auto-fit column widths
+    const colWidths = [
+      { wch: 6 },  // SR.
+      { wch: 20 }, // Name
+      { wch: 20 }, // Uniqueid
+      { wch: 18 }, // Phone
+      { wch: 15 }, // License End
+      { wch: 18 }, // City
+      { wch: 24 }, // Remark
+      { wch: 16 }, // Rechage status
+      { wch: 16 }, // New License End
+      { wch: 14 }  // Status
+    ];
+    ws['!cols'] = colWidths;
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, activeCycleTab || 'Renewals');
+    const safeSheetName = String(activeCycleTab || 'Renewals').replace(/[:\\/?*\[\]]/g, '').slice(0, 30);
+    XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
 
     const cleanTab = (activeCycleTab || 'cycle').replace(/[^a-zA-Z0-9-_]/g, '_');
     const filename = `VTS_Renewals_${label}_${cleanTab}_${new Date().toISOString().slice(0, 10)}`;
@@ -1723,20 +1820,69 @@ export function RenewalDashboard({
             <Icon name="check" size={15} /> {isFinalizing ? 'Updating...' : `✅ Update License End (${batchCounts.yes})`}
           </button>
 
+          {/* Dedicated Download Buttons for YES, NO, and ALL */}
+          <button
+            type="button"
+            className="secondary-button compact"
+            onClick={() => handleExportBatch('yes', 'xlsx')}
+            disabled={tabYesCount === 0 && batchCounts.yes === 0}
+            title="Download Excel (.xlsx) containing all approved YES vehicles with exact 10 columns"
+            style={{
+              background: 'rgba(16, 185, 129, 0.16)',
+              border: '1px solid rgba(16, 185, 129, 0.45)',
+              color: '#34d399',
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            📥 Download YES ({batchCounts.yes > 0 && batchCounts.yes !== tabYesCount ? `${batchCounts.yes} of ${tabYesCount}` : tabYesCount})
+          </button>
+
+          <button
+            type="button"
+            className="secondary-button compact"
+            onClick={() => handleExportBatch('no', 'xlsx')}
+            disabled={tabNoCount === 0 && batchCounts.no === 0}
+            title="Download Excel (.xlsx) containing all declined NO vehicles with exact 10 columns"
+            style={{
+              background: 'rgba(239, 68, 68, 0.16)',
+              border: '1px solid rgba(239, 68, 68, 0.45)',
+              color: '#f87171',
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            📥 Download NO ({batchCounts.no > 0 && batchCounts.no !== tabNoCount ? `${batchCounts.no} of ${tabNoCount}` : tabNoCount})
+          </button>
+
           <button
             type="button"
             className="secondary-button compact"
             onClick={() => handleExportBatch('all', 'xlsx')}
-            title="Download Excel (.xlsx) with exact 10 columns matching Google Sheet"
+            title="Download Excel (.xlsx) with all 10 columns matching Google Sheet"
+            style={{
+              background: 'rgba(59, 130, 246, 0.14)',
+              border: '1px solid rgba(59, 130, 246, 0.4)',
+              color: '#60a5fa',
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
           >
-            📥 Download Excel
+            📥 All Excel ({batchCounts.total})
           </button>
 
           <button
             type="button"
             className="secondary-button compact"
             onClick={() => handleExportBatch('all', 'csv')}
-            title="Download CSV file"
+            title="Download CSV file format"
+            style={{ fontSize: '11px' }}
           >
             CSV
           </button>
@@ -2082,13 +2228,13 @@ export function RenewalDashboard({
           <button
             type="button"
             className="secondary-button compact"
-            onClick={() => loadCycleData(activeCycleTab)}
+            onClick={handleSyncTabWithMaster}
             disabled={isSheetLoading}
-            title="Re-pull live data from Google Sheet"
-            style={{ fontSize: '11px', padding: '3px 8px', color: '#34d399', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+            title="Synchronize City, Name, SIM from Master Sheet 900 into this renewal tab in Google Sheet"
+            style={{ fontSize: '11px', padding: '3px 8px', color: '#34d399', display: 'inline-flex', alignItems: 'center', gap: '3px', fontWeight: 600 }}
           >
             <Icon name="refresh" size={11} className={isSheetLoading ? 'spin' : ''} />
-            🔄 Sync Tab
+            🔄 Sync Tab (from Master)
           </button>
           {isSheetLoading && (
             <span style={{ fontSize: '11px', color: '#60a5fa', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Syncing sheet data with Google Sheets...">
@@ -2097,6 +2243,31 @@ export function RenewalDashboard({
           )}
         </div>
       </div>
+
+      {syncStatusNotice && (
+        <div style={{
+          background: 'rgba(16, 185, 129, 0.12)',
+          border: '1px solid rgba(16, 185, 129, 0.35)',
+          borderRadius: '8px',
+          padding: '8px 14px',
+          marginBottom: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          color: '#34d399',
+          fontSize: '12px',
+          fontWeight: 500
+        }}>
+          <span>{syncStatusNotice.text}</span>
+          <button
+            type="button"
+            onClick={() => setSyncStatusNotice(null)}
+            style={{ background: 'transparent', border: 'none', color: '#34d399', cursor: 'pointer', fontSize: '12px' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {sheetSyncError && (
         <div style={{
@@ -2175,7 +2346,7 @@ export function RenewalDashboard({
         </div>
       </div>
 
-      {/* City-Wise Renewal Breakdown Widget (Yes / No Summary) */}
+      {/* City-Wise Renewal Breakdown Widget (Compact, Sleek & Advanced Radar) */}
       {cityBreakdown.length > 0 && (
         <div
           className="city-breakdown-card"
@@ -2183,23 +2354,24 @@ export function RenewalDashboard({
             background: 'var(--bg-card)',
             border: '1px solid var(--border-color)',
             borderRadius: '10px',
-            padding: '12px 16px',
-            marginBottom: '16px'
+            padding: '10px 14px',
+            marginBottom: '14px'
           }}
         >
+          {/* Top Control Bar */}
           <div
             style={{
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              marginBottom: '10px',
+              marginBottom: '8px',
               flexWrap: 'wrap',
               gap: '8px'
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                🏙️ City-Wise Renewal Breakdown
+              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                🏙️ City Renewal Breakdown
               </span>
               <span
                 style={{
@@ -2207,13 +2379,28 @@ export function RenewalDashboard({
                   color: 'var(--text-muted)',
                   background: 'rgba(255, 255, 255, 0.05)',
                   border: '1px solid var(--border-color)',
-                  padding: '2px 8px',
-                  borderRadius: '10px',
+                  padding: '1px 7px',
+                  borderRadius: '12px',
                   fontWeight: 600
                 }}
               >
-                {cityBreakdown.length} {cityBreakdown.length === 1 ? 'City' : 'Cities'}
+                {cityBreakdown.length} Cities · {batchCounts.total} Units
               </span>
+
+              {/* Mini Decision Summary Pills */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', marginLeft: '4px' }}>
+                <span style={{ color: '#34d399', fontWeight: 600, background: 'rgba(16, 185, 129, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                  🟢 Yes: {batchCounts.yes}
+                </span>
+                <span style={{ color: '#f87171', fontWeight: 600, background: 'rgba(239, 68, 68, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                  🔴 No: {batchCounts.no}
+                </span>
+                {batchCounts.blank > 0 && (
+                  <span style={{ color: '#facc15', fontWeight: 600, background: 'rgba(234, 179, 8, 0.1)', padding: '1px 6px', borderRadius: '4px' }}>
+                    ⚪ Pending: {batchCounts.blank}
+                  </span>
+                )}
+              </div>
 
               {cityFilter !== 'All' && (
                 <button
@@ -2224,9 +2411,9 @@ export function RenewalDashboard({
                     handlePageChange(1);
                   }}
                   style={{
-                    background: 'rgba(239, 68, 68, 0.15)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    color: '#f87171',
+                    background: 'rgba(239, 68, 68, 0.18)',
+                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                    color: '#fca5a5',
                     borderRadius: '6px',
                     padding: '2px 8px',
                     fontSize: '11px',
@@ -2238,107 +2425,122 @@ export function RenewalDashboard({
                   }}
                   title="Click to reset city filter to All"
                 >
-                  Filtered: {cityFilter} ✕ Show All
+                  Filtered: <strong>{cityFilter}</strong> ✕ Reset
                 </button>
               )}
             </div>
 
-            {cityBreakdown.length > 8 && (
-              <button
-                type="button"
-                onClick={() => setShowAllCities((prev) => !prev)}
+            {/* Quick Search & Compact Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input
+                type="text"
+                placeholder="🔍 Find city..."
+                value={citySearchQuery}
+                onChange={(e) => setCitySearchQuery(e.target.value)}
                 style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#60a5fa',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  padding: '2px 6px'
+                  fontSize: '11px',
+                  padding: '3px 8px',
+                  borderRadius: '6px',
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-primary)',
+                  width: '110px'
                 }}
-              >
-                {showAllCities ? '▲ Show Less' : `▼ Show All (${cityBreakdown.length}) Cities`}
-              </button>
-            )}
-          </div>
-
-          {/* City Cards Grid */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-              gap: '8px'
-            }}
-          >
-            {(showAllCities ? cityBreakdown : cityBreakdown.slice(0, 8)).map((cb) => {
-              const isActive = cityFilter === cb.city;
-              return (
-                <div
-                  key={cb.city}
-                  onClick={() => {
-                    const nextVal = isActive ? 'All' : cb.city;
-                    setCityFilter(nextVal);
-                    safeSetItem('vts_renewal_city_filter', nextVal);
-                    handlePageChange(1);
-                  }}
-                  title={`Click to filter by ${cb.city} (Total: ${cb.total} | Yes: ${cb.yes} | No: ${cb.no}${cb.pending > 0 ? ` | Pending: ${cb.pending}` : ''})`}
+              />
+              {cityBreakdown.length > 8 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllCities((prev) => !prev)}
                   style={{
-                    padding: '8px 10px',
-                    borderRadius: '8px',
-                    border: isActive ? '1.5px solid #3b82f6' : '1px solid var(--border-color)',
-                    background: isActive ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#60a5fa',
+                    fontSize: '11px',
+                    fontWeight: 600,
                     cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '4px'
+                    padding: '2px 4px'
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span
-                      style={{
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        color: isActive ? '#60a5fa' : 'var(--text-primary)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                      }}
-                    >
+                  {showAllCities ? '▲ Compact View' : `▼ Expand All (${cityBreakdown.length})`}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Sleek Compact Pills Tray */}
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '6px',
+              maxHeight: showAllCities ? '180px' : '72px',
+              overflowY: 'auto',
+              paddingRight: '4px',
+              transition: 'max-height 0.25s ease'
+            }}
+          >
+            {cityBreakdown
+              .filter(cb => !citySearchQuery || cb.city.toLowerCase().includes(citySearchQuery.toLowerCase().trim()))
+              .map((cb) => {
+                const isActive = cityFilter === cb.city;
+                return (
+                  <button
+                    key={cb.city}
+                    type="button"
+                    onClick={() => {
+                      const nextVal = isActive ? 'All' : cb.city;
+                      setCityFilter(nextVal);
+                      safeSetItem('vts_renewal_city_filter', nextVal);
+                      handlePageChange(1);
+                    }}
+                    title={`Filter by ${cb.city} (Total: ${cb.total} · Yes: ${cb.yes} · No: ${cb.no}${cb.pending > 0 ? ` · Pending: ${cb.pending}` : ''})`}
+                    style={{
+                      padding: '4px 9px',
+                      borderRadius: '20px',
+                      border: isActive ? '1.5px solid #3b82f6' : '1px solid var(--border-color)',
+                      background: isActive ? 'rgba(59, 130, 246, 0.22)' : 'rgba(255, 255, 255, 0.03)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      fontSize: '11.5px',
+                      transition: 'all 0.15s ease',
+                      boxShadow: isActive ? '0 0 8px rgba(59, 130, 246, 0.3)' : 'none'
+                    }}
+                  >
+                    <span style={{ fontWeight: isActive ? 700 : 500, color: isActive ? '#93c5fd' : 'var(--text-primary)' }}>
                       {cb.city}
                     </span>
                     <span
                       style={{
-                        fontSize: '11px',
+                        fontSize: '10.5px',
                         fontWeight: 700,
                         color: 'var(--text-muted)',
-                        background: 'rgba(255, 255, 255, 0.05)',
+                        background: 'rgba(255, 255, 255, 0.08)',
                         padding: '1px 5px',
-                        borderRadius: '4px'
+                        borderRadius: '10px'
                       }}
                     >
                       {cb.total}
                     </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px' }}>
-                    <span style={{ color: '#34d399', fontWeight: 600 }}>
-                      🟢 {cb.yes}
-                    </span>
-                    <span style={{ color: '#f87171', fontWeight: 600 }}>
-                      🔴 {cb.no}
-                    </span>
-                    {cb.pending > 0 && (
-                      <span style={{ color: '#facc15', fontWeight: 500 }}>
-                        ⚪ {cb.pending}
+                    {cb.yes > 0 && (
+                      <span style={{ color: '#34d399', fontSize: '10.5px', fontWeight: 700 }}>
+                        🟢{cb.yes}
                       </span>
                     )}
-                  </div>
-                </div>
-              );
-            })}
+                    {cb.no > 0 && (
+                      <span style={{ color: '#f87171', fontSize: '10.5px', fontWeight: 700 }}>
+                        🔴{cb.no}
+                      </span>
+                    )}
+                    {cb.pending > 0 && (
+                      <span style={{ color: '#facc15', fontSize: '10.5px', fontWeight: 600 }}>
+                        ⚪{cb.pending}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
           </div>
         </div>
       )}

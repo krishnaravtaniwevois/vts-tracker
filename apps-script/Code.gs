@@ -92,6 +92,7 @@ function doGet(e) {
     else if (action === 'saveDailySnapshot') result = saveDailySheetSnapshot(e ? e.parameter : {});
     else if (action === 'setupDailySaveTrigger') result = setupDaily445Trigger();
     else if (action === 'syncInactiveRunningSheet') result = syncInactiveRunningSheet();
+    else if (action === 'syncMasterToRenewalSheets') result = syncMasterToRenewalSheets(e ? e.parameter : {});
     else if (action === 'getWeeklyContinuousInactiveRunning') result = getWeeklyContinuousInactiveRunning(e ? e.parameter : {});
     else if (action === 'logInactiveRunningVTS') result = logInactiveRunningVTS();
     else if (action === 'reformatLogSheetNow') result = reformatLogSheetNow();
@@ -137,7 +138,7 @@ function doPost(e) {
       'deleteUser', 'submitRequirementRequest', 'submitReturnRequest', 'refreshFinalStatus',
       'protectColumnH', 'updateStatusOverride', 'updateInactiveRunningRemark', 'setActiveRenewalCycleTab',
       'setRenewalSheetUrl', 'saveDailySnapshot', 'setupDailySaveTrigger', 'syncInactiveRunningSheet',
-      'logInactiveRunningVTS', 'reformatLogSheetNow', 'createDaily1035Trigger'
+      'syncMasterToRenewalSheets', 'logInactiveRunningVTS', 'reformatLogSheetNow', 'createDaily1035Trigger'
     ];
 
     var executeAction = function() {
@@ -172,6 +173,7 @@ function doPost(e) {
       if (action === 'saveDailySnapshot') return saveDailySheetSnapshot(payload);
       if (action === 'setupDailySaveTrigger') return setupDaily445Trigger();
       if (action === 'syncInactiveRunningSheet') return syncInactiveRunningSheet();
+      if (action === 'syncMasterToRenewalSheets') return syncMasterToRenewalSheets(payload);
       if (action === 'getWeeklyContinuousInactiveRunning') return getWeeklyContinuousInactiveRunning(payload);
       if (action === 'logInactiveRunningVTS') return logInactiveRunningVTS();
       if (action === 'reformatLogSheetNow') return reformatLogSheetNow();
@@ -1422,10 +1424,39 @@ function getRenewalCycleTabs(targetTabName) {
         if (idxNewLic === -1 && headers.length >= 9) idxNewLic = 8; // Col I
         if (idxDone === -1 && headers.length >= 10) idxDone = 9; // Col J
 
+        // Load Master Sheet '900' devices to auto-heal and sync City/Name/Phone on the fly
+        var masterDevices = getMasterDevices();
+        var masterMap = {};
+        for (var mdIdx = 0; mdIdx < masterDevices.length; mdIdx++) {
+          var mDevItem = masterDevices[mdIdx];
+          if (mDevItem.imei) masterMap[mDevItem.imei] = mDevItem;
+        }
+
         var sheetDevices = [];
         for (var r = 1; r < data.length; r++) {
           var imei = normalizeUniqueid(data[r][idxImei]);
           if (!imei) continue;
+
+          // Auto-heal metadata (City, Name, Phone) from Master Sheet '900' if changed
+          var mDev = masterMap[imei];
+          if (mDev) {
+            var curCity = idxCity > -1 ? String(data[r][idxCity] || '').trim() : '';
+            var curName = idxName > -1 ? String(data[r][idxName] || '').trim() : '';
+            var curPhone = idxPhone > -1 ? normalizeUniqueid(data[r][idxPhone]) : '';
+
+            if (mDev.city && mDev.city !== curCity && idxCity > -1) {
+              try { activeSheet.getRange(r + 1, idxCity + 1).setValue(mDev.city); } catch(e){}
+              data[r][idxCity] = mDev.city;
+            }
+            if (mDev.vehicle && mDev.vehicle !== curName && idxName > -1) {
+              try { activeSheet.getRange(r + 1, idxName + 1).setValue(mDev.vehicle); } catch(e){}
+              data[r][idxName] = mDev.vehicle;
+            }
+            if (mDev.sim && normalizeUniqueid(mDev.sim) !== curPhone && idxPhone > -1) {
+              try { activeSheet.getRange(r + 1, idxPhone + 1).setNumberFormat('@').setValue(normalizeUniqueid(mDev.sim)); } catch(e){}
+              data[r][idxPhone] = mDev.sim;
+            }
+          }
           var raw = idxStatus > -1 ? String(data[r][idxStatus] || '').trim().toLowerCase() : '';
           var dec = 'Pending';
           if (raw === 'yes' || raw === 'approved') {
@@ -1520,6 +1551,171 @@ function setActiveRenewalCycleTab(payload) {
     return { success: true, activeTab: tabName, message: 'Active renewal cycle tab set to: ' + tabName };
   } catch (err) {
     return { success: false, error: err.toString() };
+  }
+}
+
+/**
+ * Synchronizes City, Vehicle Name, and SIM/Phone from Master Sheet '900'
+ * into all active/monthly tabs in 'Renewal done month wise' Google Sheet.
+ */
+function syncMasterToRenewalSheets(payload) {
+  try {
+    var masterDevices = getMasterDevices();
+    if (!masterDevices || masterDevices.length === 0) {
+      return { success: false, error: 'No master devices found in sheet 900' };
+    }
+
+    var masterMap = {};
+    for (var m = 0; m < masterDevices.length; m++) {
+      var md = masterDevices[m];
+      if (md.imei) {
+        masterMap[md.imei] = md;
+      }
+    }
+
+    var cycleSS = openRenewalSheetStrict();
+    if (!cycleSS) return { success: false, error: 'Could not open Renewal Month Wise Sheet' };
+
+    var targetTab = payload && payload.tabName ? String(payload.tabName).trim() : '';
+    var syncAllTabs = !targetTab || (payload && (payload.syncAllTabs === true || payload.syncAll === true));
+
+    var sheetsToSync = [];
+    if (targetTab && !syncAllTabs) {
+      var s = cycleSS.getSheetByName(targetTab);
+      if (s) sheetsToSync.push(s);
+    } else {
+      var allSheets = cycleSS.getSheets();
+      for (var i = 0; i < allSheets.length; i++) {
+        var sName = allSheets[i].getName();
+        if (['900', 'Users', 'Renewal Log', 'Form Responses 1', 'VTS Returns', 'VTS Data', 'analysis'].indexOf(sName) === -1) {
+          sheetsToSync.push(allSheets[i]);
+        }
+      }
+    }
+
+    var totalUpdated = 0;
+    var updatedTabs = [];
+
+    for (var t = 0; t < sheetsToSync.length; t++) {
+      var sheet = sheetsToSync[t];
+      var data = sheet.getDataRange().getValues();
+      if (data.length <= 1) continue;
+
+      var headers = data[0].map(function(h) { return String(h).trim().toLowerCase(); });
+      var idxName = findColIndex(headers, ['name', 'vehicle']);
+      var idxImei = findColIndex(headers, ['uniqueid', 'imei', 'device id', 'unique id']);
+      var idxPhone = findColIndex(headers, ['phone', 'sim']);
+      var idxCity = findColIndex(headers, ['city']);
+
+      if (idxName === -1) idxName = 1; // Col B
+      if (idxImei === -1) idxImei = 2; // Col C
+      if (idxPhone === -1) idxPhone = 3; // Col D
+      if (idxCity === -1) idxCity = 5; // Col F
+
+      var tabUpdatedCount = 0;
+      for (var r = 1; r < data.length; r++) {
+        var rowImei = normalizeUniqueid(data[r][idxImei]);
+        if (!rowImei || !masterMap[rowImei]) continue;
+
+        var mDev = masterMap[rowImei];
+        var rowNum = r + 1;
+        var rowModified = false;
+
+        // Check City
+        var sheetCity = idxCity > -1 ? String(data[r][idxCity] || '').trim() : '';
+        if (mDev.city && mDev.city !== sheetCity && idxCity > -1) {
+          sheet.getRange(rowNum, idxCity + 1).setValue(mDev.city);
+          rowModified = true;
+        }
+
+        // Check Vehicle Name
+        var sheetName = idxName > -1 ? String(data[r][idxName] || '').trim() : '';
+        if (mDev.vehicle && mDev.vehicle !== sheetName && idxName > -1) {
+          sheet.getRange(rowNum, idxName + 1).setValue(mDev.vehicle);
+          rowModified = true;
+        }
+
+        // Check Phone
+        var sheetPhone = idxPhone > -1 ? normalizeUniqueid(data[r][idxPhone]) : '';
+        if (mDev.sim && normalizeUniqueid(mDev.sim) !== sheetPhone && idxPhone > -1) {
+          sheet.getRange(rowNum, idxPhone + 1).setNumberFormat('@').setValue(normalizeUniqueid(mDev.sim));
+          rowModified = true;
+        }
+
+        if (rowModified) {
+          tabUpdatedCount++;
+          totalUpdated++;
+        }
+      }
+
+      if (tabUpdatedCount > 0) {
+        updatedTabs.push(sheet.getName() + ' (' + tabUpdatedCount + ' items)');
+      }
+    }
+
+    return {
+      success: true,
+      updatedCount: totalUpdated,
+      updatedTabs: updatedTabs,
+      message: 'Successfully synced ' + totalUpdated + ' vehicle updates from Master Sheet into ' + updatedTabs.length + ' renewal tabs!'
+    };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
+
+function menuSyncMasterToRenewalSheets() {
+  var ui = SpreadsheetApp.getUi();
+  var res = syncMasterToRenewalSheets({ syncAllTabs: true });
+  if (res.success) {
+    ui.alert('✅ Master to Renewal Sheets Sync Complete', res.message + (res.updatedTabs.length > 0 ? '\n\nUpdated Tabs:\n' + res.updatedTabs.join('\n') : '\n\nAll tabs are already up-to-date!'), ui.ButtonSet.OK);
+  } else {
+    ui.alert('⚠️ Sync Error', res.error || 'Failed to sync renewal sheets', ui.ButtonSet.OK);
+  }
+}
+
+function syncDeviceToAllRenewalSheets(imei, details) {
+  if (!imei || !details) return;
+  try {
+    var cycleSS = openRenewalSheetStrict();
+    if (!cycleSS) return;
+    var cycleSheets = cycleSS.getSheets();
+    for (var s = 0; s < cycleSheets.length; s++) {
+      var cSheet = cycleSheets[s];
+      var cName = cSheet.getName();
+      if (['900', 'Users', 'Renewal Log', 'Form Responses 1', 'VTS Returns', 'VTS Data', 'analysis'].indexOf(cName) > -1) continue;
+
+      var cData = cSheet.getDataRange().getValues();
+      if (cData.length <= 1) continue;
+
+      var headers = cData[0].map(function(h) { return String(h).trim().toLowerCase(); });
+      var idxName = findColIndex(headers, ['name', 'vehicle']);
+      var idxImei = findColIndex(headers, ['uniqueid', 'imei', 'device id', 'unique id']);
+      var idxPhone = findColIndex(headers, ['phone', 'sim']);
+      var idxCity = findColIndex(headers, ['city']);
+
+      if (idxName === -1) idxName = 1;
+      if (idxImei === -1) idxImei = 2;
+      if (idxPhone === -1) idxPhone = 3;
+      if (idxCity === -1) idxCity = 5;
+
+      for (var r = 1; r < cData.length; r++) {
+        if (normalizeUniqueid(cData[r][idxImei]) === imei) {
+          var rowNum = r + 1;
+          if (details.vehicle !== undefined && details.vehicle !== String(cData[r][idxName] || '').trim()) {
+            cSheet.getRange(rowNum, idxName + 1).setValue(details.vehicle);
+          }
+          if (details.sim !== undefined && normalizeUniqueid(details.sim) !== normalizeUniqueid(cData[r][idxPhone])) {
+            cSheet.getRange(rowNum, idxPhone + 1).setNumberFormat('@').setValue(normalizeUniqueid(details.sim));
+          }
+          if (details.city !== undefined && details.city !== String(cData[r][idxCity] || '').trim()) {
+            cSheet.getRange(rowNum, idxCity + 1).setValue(details.city);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    Logger.log('syncDeviceToAllRenewalSheets error: ' + err);
   }
 }
 
@@ -3167,8 +3363,30 @@ function onEdit(e) {
     var sheet = range.getSheet();
     var sName = sheet.getName();
 
-    // Ignore master or non-cycle sheets
-    if (['900', 'VTS Data', 'Users', 'City_Email_Contacts', 'Search_History', 'Pivot Table 5', 'Search', 'Vendor Vehicles', 'analysis'].indexOf(sName) > -1) {
+    // 1. Handle direct edits in Master Sheet '900' (Col B: Name, Col C: Uniqueid, Col D: Phone, Col E: City)
+    // Synchronize to 'Renewal done month wise' across all tabs!
+    var isMaster = (sName === '900' || sName === VTS_CONFIG.MASTER_TAB_NAME);
+    if (isMaster) {
+      var mRow = range.getRow();
+      var mCol = range.getColumn();
+      if (mRow < 2) return; // ignore header row
+
+      if (mCol === 2 || mCol === 3 || mCol === 4 || mCol === 5) {
+        var rowVals = sheet.getRange(mRow, 1, 1, 10).getValues()[0];
+        var vName = String(rowVals[1] || '').trim();
+        var vImei = normalizeUniqueid(rowVals[2]);
+        var vSim = normalizeUniqueid(rowVals[3]);
+        var vCity = String(rowVals[4] || '').trim();
+
+        if (vImei) {
+          syncDeviceToAllRenewalSheets(vImei, { vehicle: vName, city: vCity, sim: vSim });
+        }
+      }
+      return;
+    }
+
+    // Ignore other non-cycle sheets
+    if (['VTS Data', 'Users', 'City_Email_Contacts', 'Search_History', 'Pivot Table 5', 'Search', 'Vendor Vehicles', 'analysis'].indexOf(sName) > -1) {
       return;
     }
 
@@ -4725,6 +4943,7 @@ function onOpen() {
     ui.createMenu('🚀 VTS Tracker Hub')
       .addItem('💾 Save/Update Today\'s Report (Drive Only)', 'menuSaveTodaySnapshot')
       .addItem('🔄 Sync "VTS Inactive + running" Sheet', 'menuSyncInactiveRunning')
+      .addItem('🔄 Sync Master Data to Renewal Sheets', 'menuSyncMasterToRenewalSheets')
       .addItem('📋 Log Inactive + Running to "VTS Data" Now', 'menuLogInactiveRunningVTS')
       .addItem('🎨 Reformat "VTS Data" Sheet', 'reformatLogSheetNow')
       .addSeparator()

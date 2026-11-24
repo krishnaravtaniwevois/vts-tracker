@@ -1932,6 +1932,27 @@ export async function setActiveRenewalCycleTab(tabName) {
   }
 }
 
+export async function syncMasterToRenewalSheets(tabName = '', syncAllTabs = true) {
+  const apiUrl = getStoredApiUrl();
+  if (!apiUrl) {
+    return { success: true, message: 'Sync simulated (Demo Mode)' };
+  }
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'syncMasterToRenewalSheets',
+        tabName,
+        syncAllTabs
+      }),
+      redirect: 'follow'
+    });
+    return await response.json();
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
 export async function updateRenewalSheetUrl(urlOrId) {
   const apiUrl = getStoredApiUrl();
   if (!apiUrl) {
